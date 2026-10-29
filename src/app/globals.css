@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/*
+  Larder design tokens.
+  Light: sage-white paper, bottle-green ink, eucalyptus primary.
+  Freshness scale: leaf (fresh), wattle (use soon), persimmon (use today), beetroot (spoiled).
+  Always pair freshness colour with a word or icon.
+*/
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --paper: #f2f4ee;
+  --surface: #fbfcf8;
+  --surface-2: #e8ece2;
+  --line: #d3d9cc;
+  --ink: #1b2620;
+  --ink-2: #4c5a52;
+  --ink-3: #6f7b73;
+  --primary: #2d5b4c;
+  --primary-ink: #f4f7f1;
+  --primary-soft: #d9e6dd;
+  --fresh: #3f7d3a;
+  --fresh-soft: #dcebd4;
+  --soon: #9a6a00;
+  --soon-soft: #f8e7b6;
+  --today: #b4481f;
+  --today-soft: #f9d9c8;
+  --spoiled: #8e2346;
+  --spoiled-soft: #f1d3dc;
+  --focus: #2d5b4c;
+  --shadow: 0 1px 0 rgb(27 38 32 / 0.04), 0 8px 24px -12px rgb(27 38 32 / 0.18);
+}
+
+.dark {
+  --paper: #121815;
+  --surface: #19211d;
+  --surface-2: #222c27;
+  --line: #2f3a34;
+  --ink: #e6ece4;
+  --ink-2: #b3bfb6;
+  --ink-3: #8c9990;
+  --primary: #8cc5a8;
+  --primary-ink: #0f1a15;
+  --primary-soft: #23382f;
+  --fresh: #8fcf7f;
+  --fresh-soft: #1f3320;
+  --soon: #f0c14b;
+  --soon-soft: #3a2f12;
+  --today: #ff9b6e;
+  --today-soft: #42241a;
+  --spoiled: #f08aa9;
+  --spoiled-soft: #3e1d29;
+  --focus: #8cc5a8;
+  --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 10px 30px -14px rgb(0 0 0 / 0.6);
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-primary: var(--primary);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-soft: var(--primary-soft);
+  --color-fresh: var(--fresh);
+  --color-fresh-soft: var(--fresh-soft);
+  --color-soon: var(--soon);
+  --color-soon-soft: var(--soon-soft);
+  --color-today: var(--today);
+  --color-today-soft: var(--today-soft);
+  --color-spoiled: var(--spoiled);
+  --color-spoiled-soft: var(--spoiled-soft);
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-young-serif), ui-serif, Georgia, serif;
+  --shadow-card: var(--shadow);
+  --radius-card: 1.25rem;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01";
+}
+
+:focus-visible {
+  outline: 2.5px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+/* Bottom padding so content clears the tab bar and the iOS home indicator. */
+.pb-tabbar {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+@media (min-width: 1024px) {
+  .pb-tabbar {
+    padding-bottom: 3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes toast-in {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.animate-sheet-up {
+  animation: sheet-up 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.animate-fade-in {
+  animation: fade-in 200ms ease-out;
+}
+.animate-toast-in {
+  animation: toast-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
