@@ -3,17 +3,21 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Camera, ChefHat, Check, Leaf, Settings } from "lucide-react";
+import { CalendarDays, Camera, ChefHat, Check, ClipboardList, Leaf, PencilLine } from "lucide-react";
 import { useLarder, DEFAULT_PROFILE } from "@/lib/store";
 import { useItemViews, type ItemView } from "@/lib/selectors";
 import { describeDaysLeft } from "@/lib/shelf-life/engine";
 import { useHydrated } from "@/lib/use-hydrated";
 import { Button, Card, EmptyState, PageHeader, SectionTitle, buttonClass, cx } from "@/components/ui";
-import { STATUS_META, StatusPill } from "@/components/freshness";
-import { ItemSheet } from "@/components/item-sheet";
-import { capitalise, markBinned, markUsed } from "@/components/pantry/actions";
+import { STATUS_META } from "@/components/freshness";
+import { ItemSheet, type SheetIntent } from "@/components/item-sheet";
+import { InstallCard } from "@/components/install-card";
+import { binMany, capitalise, markBinned, markUsed } from "@/components/pantry/actions";
 import { formatAUD, formatQuantity, startOfMonth, wasteTotals } from "@/components/pantry/format";
+import { ItemRow } from "@/components/pantry/item-row";
+import { OverflowMenu } from "@/components/pantry/overflow-menu";
 import { WasteSplitBar } from "@/components/pantry/waste-bar";
+import { keepFocusNear } from "@/components/pantry/focus";
 
 function greeting(hour: number) {
   if (hour >= 5 && hour < 12) return "Good morning";
@@ -21,16 +25,34 @@ function greeting(hour: number) {
   return "Good evening";
 }
 
-type SheetState = { id: string; intent?: "still-good" } | null;
+/** How many urgent items get a full card on desktop; the rest are compact rows. */
+const DESKTOP_CARDS = 4;
+
+type Open = (id: string, intent?: SheetIntent) => void;
+type SheetState = { id: string; intent?: SheetIntent } | null;
+
+const headerLink =
+  "inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden";
+
+/** Where focus goes when the thing that had it is gone: the "Eat me first" heading. */
+const todayHeading = () => document.getElementById("eat-first");
 
 export default function TodayPage() {
   const hydrated = useHydrated();
   const router = useRouter();
   const views = useItemViews();
   const onboarded = useLarder((s) => s.settings.onboarded);
+  const planner = useLarder((s) => s.settings.mealPlannerEnabled);
   const householdName = useLarder((s) => s.profile.householdName);
   const [sheet, setSheet] = useState<SheetState>(null);
-  const closeSheet = useCallback(() => setSheet(null), []);
+  const closeSheet = useCallback(() => {
+    setSheet(null);
+    // If the item was used or binned from the sheet, its card is gone: keep focus on the page.
+    setTimeout(() => {
+      if (document.activeElement === document.body) todayHeading()?.focus();
+    }, 50);
+  }, []);
+  const open = useCallback<Open>((id, intent) => setSheet({ id, intent }), []);
 
   const needsWelcome = hydrated && !onboarded && views.length === 0;
   useEffect(() => {
@@ -40,21 +62,22 @@ export default function TodayPage() {
   const now = hydrated ? new Date() : null;
   const name = householdName && householdName !== DEFAULT_PROFILE.householdName ? householdName : null;
   const dateline = now?.toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" });
+  const dashboard = hydrated && !needsWelcome && views.length > 0;
 
   return (
-    <>
+    // data-wide lets the shell give the two-column dashboard more room on desktop.
+    <div data-wide={dashboard || undefined}>
       <PageHeader
         title={now ? greeting(now.getHours()) : <span className="invisible">Hello</span>}
         subtitle={now ? [name, dateline].filter(Boolean).join(" · ") : <span className="invisible">Today</span>}
+        showSettings
         actions={
-          <Link
-            href="/settings"
-            aria-label="Settings"
-            title="Settings"
-            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
-          >
-            <Settings size={22} aria-hidden />
-          </Link>
+          // Insights is linked from "This month" below (and the Larder header); the rail has both on desktop.
+          hydrated && planner ? (
+            <Link href="/plan" aria-label="Meal plan" title="Meal plan" className={headerLink}>
+              <CalendarDays size={22} aria-hidden />
+            </Link>
+          ) : undefined
         }
       />
       <div className="px-5 lg:px-0">
@@ -63,11 +86,11 @@ export default function TodayPage() {
         ) : views.length === 0 ? (
           <FirstRun />
         ) : (
-          <Dashboard views={views} onOpen={(id, intent) => setSheet({ id, intent })} />
+          <Dashboard views={views} onOpen={open} />
         )}
       </div>
       <ItemSheet itemId={sheet?.id ?? null} intent={sheet?.intent} open={!!sheet} onClose={closeSheet} />
-    </>
+    </div>
   );
 }
 
@@ -77,7 +100,7 @@ function TodaySkeleton() {
       <div className="h-6 w-40 rounded-full bg-surface-2" />
       <div className="flex gap-3 overflow-hidden">
         {[0, 1].map((i) => (
-          <div key={i} className="h-64 w-[17.5rem] shrink-0 rounded-[var(--radius-card)] bg-surface-2/70" />
+          <div key={i} className="h-52 w-[78%] max-w-80 shrink-0 rounded-[var(--radius-card)] bg-surface-2/70" />
         ))}
       </div>
       <div className="h-24 rounded-[var(--radius-card)] bg-surface-2/70" />
@@ -85,20 +108,63 @@ function TodaySkeleton() {
   );
 }
 
+/** Whether photo reading is set up, so first-run can lead with what will actually work. */
+function useScanConfigured(): boolean | null {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch("/api/scan", { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { configured?: boolean } | null) => {
+        if (d && typeof d.configured === "boolean") setConfigured(d.configured);
+      })
+      .catch(() => {
+        /* offline or aborted: keep the default */
+      });
+    return () => ac.abort();
+  }, []);
+  return configured;
+}
+
 function FirstRun() {
   const loadDemoData = useLarder((s) => s.loadDemoData);
+  const configured = useScanConfigured();
+  const scanFirst = configured !== false;
   return (
     <Card className="mt-2">
       <EmptyState
         emoji="🧺"
         title="Nothing in the larder yet"
-        body="Snap your shopping receipt and we'll work out what you bought and when each thing needs eating."
+        body={
+          scanFirst
+            ? "Snap your shopping receipt and we'll work out what you bought and when each thing needs eating."
+            : "Paste your shopping list or an online order, and we'll work out when each thing needs eating."
+        }
         action={
           <div className="flex flex-col items-center gap-2">
-            <Link href="/add" className={buttonClass("primary", "lg")}>
-              <Camera size={20} aria-hidden />
-              Scan your first shop
-            </Link>
+            {scanFirst ? (
+              <>
+                <Link href="/add?method=receipt" className={buttonClass("primary", "lg")}>
+                  <Camera size={20} aria-hidden />
+                  Scan your first shop
+                </Link>
+                <Link href="/add?method=paste" className={buttonClass("secondary", "md")}>
+                  <ClipboardList size={18} aria-hidden />
+                  Paste a list
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link href="/add?method=paste" className={buttonClass("primary", "lg")}>
+                  <ClipboardList size={20} aria-hidden />
+                  Paste a list
+                </Link>
+                <Link href="/add?method=receipt" className={buttonClass("secondary", "md")}>
+                  <Camera size={18} aria-hidden />
+                  Scan a receipt
+                </Link>
+              </>
+            )}
             <Button variant="ghost" onClick={loadDemoData}>
               Try with sample food
             </Button>
@@ -109,27 +175,42 @@ function FirstRun() {
   );
 }
 
-function Dashboard({ views, onOpen }: { views: ItemView[]; onOpen: (id: string, intent?: "still-good") => void }) {
+function Dashboard({ views, onOpen }: { views: ItemView[]; onOpen: Open }) {
   const urgent = views.filter((v) => v.expiry.status === "use-today" || v.expiry.status === "use-soon");
   const expired = views.filter((v) => v.expiry.status === "expired");
   const nextUp = views.find((v) => v.expiry.status === "fresh");
+  const rest = urgent.slice(DESKTOP_CARDS);
 
   return (
-    <div className="flex flex-col gap-8">
-      <section aria-labelledby="eat-first">
+    <div className="flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start lg:gap-10">
+      <section aria-labelledby="eat-first" className="min-w-0">
         <SectionTitle
           action={
             urgent.length > 0 && <span className="text-sm text-ink-2">{urgent.length === 1 ? "1 item" : `${urgent.length} items`}</span>
           }
         >
-          <span id="eat-first">Eat me first</span>
+          <span id="eat-first" tabIndex={-1} className="rounded-lg">
+            Eat me first
+          </span>
         </SectionTitle>
         {urgent.length > 0 ? (
-          <ul className="scrollbar-none -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-3 overflow-x-auto px-5 pb-2 lg:mx-0 lg:grid lg:grid-cols-2 lg:overflow-visible lg:px-0">
-            {urgent.map((v) => (
-              <EatFirstCard key={v.item.id} view={v} onOpen={onOpen} />
-            ))}
-          </ul>
+          <>
+            <ul className="scrollbar-none -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-3 overflow-x-auto px-5 pb-2 lg:mx-0 lg:grid lg:grid-cols-2 lg:overflow-visible lg:px-0 lg:pb-0">
+              {urgent.map((v) => (
+                <EatFirstCard key={v.item.id} view={v} onOpen={onOpen} />
+              ))}
+            </ul>
+            {rest.length > 0 && (
+              <div className="mt-6 hidden lg:block">
+                <h3 className="mb-1 text-sm font-semibold text-ink-2">Also coming up</h3>
+                <ul className="-mx-2 flex flex-col">
+                  {rest.map((v) => (
+                    <ItemRow key={v.item.id} view={v} onOpen={onOpen} focusFallback={todayHeading} />
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
         ) : (
           <Card className="flex items-center gap-4 p-4">
             <span aria-hidden className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-fresh-soft text-fresh">
@@ -147,60 +228,56 @@ function Dashboard({ views, onOpen }: { views: ItemView[]; onOpen: (id: string, 
         )}
       </section>
 
-      {expired.length > 0 && (
-        <section aria-labelledby="check-these">
-          <SectionTitle>
-            <span id="check-these">Check these</span>
-          </SectionTitle>
-          <p className="-mt-1 mb-3 text-sm text-ink-2">Past their date. Bin them, or tell us if they&apos;re still fine.</p>
-          <Card>
-            <ul className="divide-y divide-line">
-              {expired.map((v) => (
-                <CheckRow key={v.item.id} view={v} onOpen={onOpen} />
-              ))}
-            </ul>
-          </Card>
-        </section>
-      )}
-
-      <Summary views={views} />
-      <MonthInsight />
+      <div className="flex flex-col gap-8">
+        {expired.length > 0 && <CheckThese views={expired} onOpen={onOpen} />}
+        <Summary views={views} />
+        <MonthInsight />
+        <InstallCard />
+      </div>
     </div>
   );
 }
 
-function EatFirstCard({ view, onOpen }: { view: ItemView; onOpen: (id: string) => void }) {
+function EatFirstCard({ view, onOpen }: { view: ItemView; onOpen: Open }) {
   const { item, location, expiry } = view;
   const meta = STATUS_META[expiry.status];
   const days = capitalise(describeDaysLeft(expiry, item.dateKind));
+  const details = [formatQuantity(item.quantity, item.unit), location?.name, item.openedAt && "Opened"].filter(Boolean).join(" · ");
   return (
-    <li className="w-[17.5rem] shrink-0 snap-start lg:w-auto">
+    // On desktop only the first few are cards; the rest show as rows below.
+    <li className={cx("w-[78%] max-w-80 shrink-0 snap-start lg:w-auto lg:max-w-none", "lg:[&:nth-child(n+5)]:hidden")}>
       <Card className="flex h-full flex-col p-4">
         <button
           type="button"
+          data-row-focus={item.id}
           onClick={() => onOpen(item.id)}
           className="-m-1 flex flex-1 flex-col items-start rounded-2xl p-1 text-left"
-          aria-label={`${item.name}, ${days}. Open details`}
+          aria-label={`${item.name}, ${days}, ${details}. Open details`}
         >
-          <span className="flex w-full items-start justify-between gap-2">
+          <span className="flex w-full items-center gap-3">
             <span
               aria-hidden
-              className={cx("flex h-16 w-16 items-center justify-center rounded-2xl text-[2.5rem] leading-none", meta.soft)}
+              className={cx("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-[1.75rem] leading-none", meta.soft)}
             >
               {item.emoji}
             </span>
-            <StatusPill status={expiry.status} />
+            <span className="line-clamp-2 min-w-0 font-display text-xl leading-snug text-ink">{item.name}</span>
           </span>
-          <span className="mt-4 line-clamp-2 font-display text-xl leading-snug text-ink">{item.name}</span>
-          <span className={cx("mt-1 text-[15px] font-semibold", meta.text)}>{days}</span>
-          <span className="mt-0.5 text-sm text-ink-2">
-            {formatQuantity(item.quantity, item.unit)}
-            {location && ` · ${location.name}`}
-            {item.openedAt && " · Opened"}
+          <span className={cx("mt-3 inline-flex items-center gap-1.5 text-[15px] font-semibold", meta.text)}>
+            <meta.Icon size={16} aria-hidden strokeWidth={2.5} />
+            {days}
           </span>
+          <span className="mt-0.5 text-sm text-ink-2">{details}</span>
         </button>
         <div className="mt-4 flex gap-2">
-          <Button size="sm" className="h-11 flex-1 whitespace-nowrap px-3" onClick={() => markUsed(item.id)}>
+          <Button
+            size="sm"
+            className="h-11 flex-1 whitespace-nowrap px-3"
+            onClick={(e) => {
+              keepFocusNear(e.currentTarget, todayHeading);
+              markUsed(item.id);
+            }}
+          >
             <Check size={16} aria-hidden strokeWidth={2.5} />
             Used it
           </Button>
@@ -217,25 +294,84 @@ function EatFirstCard({ view, onOpen }: { view: ItemView; onOpen: (id: string) =
   );
 }
 
-function CheckRow({ view, onOpen }: { view: ItemView; onOpen: (id: string, intent?: "still-good") => void }) {
+function CheckThese({ views, onOpen }: { views: ItemView[]; onOpen: Open }) {
+  const anyBestBefore = views.some((v) => v.item.dateKind === "best-before");
+  return (
+    <section aria-labelledby="check-these">
+      <SectionTitle
+        action={
+          views.length > 1 && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                binMany(views.map((v) => v.item.id));
+                setTimeout(() => todayHeading()?.focus(), 50);
+              }}
+            >
+              Bin all {views.length}
+            </Button>
+          )
+        }
+      >
+        <span id="check-these">Check these</span>
+      </SectionTitle>
+      <p className="-mt-1 mb-3 text-sm text-ink-2">
+        {anyBestBefore
+          ? "Past their date. Bin them, or tell us if they're still fine."
+          : "Past their use-by date, so they're best binned."}
+      </p>
+      <Card className="@container">
+        <ul className="divide-y divide-line">
+          {views.map((v) => (
+            <CheckRow key={v.item.id} view={v} onOpen={onOpen} />
+          ))}
+        </ul>
+      </Card>
+    </section>
+  );
+}
+
+function CheckRow({ view, onOpen }: { view: ItemView; onOpen: Open }) {
   const { item, expiry } = view;
+  const bestBefore = item.dateKind === "best-before";
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-spoiled-soft text-2xl">
         {item.emoji}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <button type="button" onClick={() => onOpen(item.id)} className="min-w-0 rounded-lg text-left">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 @md:flex-row @md:items-center @md:justify-between">
+        <button
+          type="button"
+          data-row-focus={item.id}
+          onClick={() => onOpen(item.id)}
+          className="min-w-0 rounded-lg text-left"
+        >
           <span className="block truncate font-semibold text-ink">{item.name}</span>
-          <span className="block text-sm text-spoiled">{describeDaysLeft(expiry, item.dateKind)}</span>
+          <span className="block text-sm text-spoiled">{capitalise(describeDaysLeft(expiry, item.dateKind))}</span>
         </button>
-        <div className="flex shrink-0 gap-2">
-          <Button size="sm" variant="secondary" className="h-10" onClick={() => markBinned(item.id)}>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-10"
+            onClick={(e) => {
+              keepFocusNear(e.currentTarget, todayHeading);
+              markBinned(item.id);
+            }}
+          >
             Binned it
           </Button>
-          <Button size="sm" variant="ghost" className="h-10" onClick={() => onOpen(item.id, "still-good")}>
-            Still good
-          </Button>
+          {bestBefore ? (
+            <Button size="sm" variant="ghost" className="h-10" onClick={() => onOpen(item.id, "still-good")}>
+              Still good
+            </Button>
+          ) : (
+            <OverflowMenu
+              label={`More for ${item.name}`}
+              actions={[{ label: "Edit date", Icon: PencilLine, onSelect: () => onOpen(item.id, "edit-date") }]}
+            />
+          )}
         </div>
       </div>
     </li>
@@ -261,26 +397,26 @@ function Summary({ views }: { views: ItemView[] }) {
       <SectionTitle>
         <span id="at-a-glance">At a glance</span>
       </SectionTitle>
-      <Card className="scrollbar-none flex overflow-x-auto">
-        {cells.map((c, i) => (
-          <Link
-            key={c.key}
-            href={c.href}
-            className={cx(
-              "flex min-w-[5.5rem] flex-1 flex-col items-center justify-center gap-0.5 rounded-[var(--radius-card)] px-2 py-4 text-center hover:bg-surface-2/60",
-              i > 0 && "border-l border-line rounded-none",
-            )}
-          >
-            <span className={cx("font-display text-2xl tabular-nums", c.key === "week" && c.n > 0 ? "text-soon" : "text-ink")}>
-              {c.n}
-            </span>
-            <span className="text-[13px] text-ink-2">
-              <span className="sr-only">{c.n} </span>
-              <span aria-hidden>{c.short}</span>
-              <span className="sr-only"> {c.label}</span>
-            </span>
-          </Link>
-        ))}
+      <Card className="overflow-hidden">
+        <ul className="scrollbar-none grid auto-cols-[minmax(5.5rem,1fr)] grid-flow-col gap-px overflow-x-auto bg-line lg:grid-flow-row lg:grid-cols-2 lg:overflow-visible">
+          {cells.map((c) => (
+            <li key={c.key} className="bg-surface lg:[&:last-child:nth-child(odd)]:col-span-2">
+              <Link
+                href={c.href}
+                className="flex h-full flex-col items-center justify-center gap-0.5 px-2 py-4 text-center hover:bg-surface-2/60 focus-visible:outline-offset-[-3px]"
+              >
+                <span className={cx("font-display text-2xl tabular-nums", c.key === "week" && c.n > 0 ? "text-soon" : "text-ink")}>
+                  {c.n}
+                </span>
+                <span className="text-[13px] text-ink-2">
+                  <span className="sr-only">{c.n} </span>
+                  <span aria-hidden>{c.short}</span>
+                  <span className="sr-only"> {c.label}</span>
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
       </Card>
     </section>
   );
@@ -304,28 +440,26 @@ function MonthInsight() {
       >
         <span id="this-month">This month</span>
       </SectionTitle>
-      <Link href="/insights" className="block rounded-[var(--radius-card)]">
-        <Card className="p-4 transition-colors hover:bg-surface-2/40">
-          {total === 0 ? (
-            <p className="text-[15px] text-ink-2">Nothing used up or binned yet this month.</p>
-          ) : (
-            <>
-              <p className="text-[15px] text-ink">
-                <strong className="font-semibold">{month.used} used</strong>, {month.binned} binned
-                {month.binnedPriced && month.binnedValue > 0 && (
-                  <span className="text-ink-2"> · about {formatAUD(month.binnedValue)} wasted</span>
-                )}
-              </p>
-              <WasteSplitBar used={month.used} binned={month.binned} className="mt-3" />
-              <p className="mt-2 text-sm text-ink-2">
-                {month.binned === 0
-                  ? "Nothing wasted so far. Lovely."
-                  : `${Math.round((month.used / total) * 100)}% of what left the larder got eaten.`}
-              </p>
-            </>
-          )}
-        </Card>
-      </Link>
+      <Card className="p-4">
+        {total === 0 ? (
+          <p className="text-[15px] text-ink-2">Nothing used up or binned yet this month.</p>
+        ) : (
+          <>
+            <p className="text-[15px] text-ink">
+              <strong className="font-semibold">{month.used} used</strong>, {month.binned} binned
+              {month.binnedPriced && month.binnedValue > 0 && (
+                <span className="text-ink-2"> · about {formatAUD(month.binnedValue)} wasted</span>
+              )}
+            </p>
+            <WasteSplitBar used={month.used} binned={month.binned} className="mt-3" />
+            <p className="mt-2 text-sm text-ink-2">
+              {month.binned === 0
+                ? "Nothing wasted so far. Lovely."
+                : `${Math.round((month.used / total) * 100)}% of what left the larder got eaten.`}
+            </p>
+          </>
+        )}
+      </Card>
     </section>
   );
 }

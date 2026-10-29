@@ -50,6 +50,11 @@ Rules:
 - Use simple ingredient names without brands ("beef mince", not "Coles beef mince 500g"). Quantity null when it is "to taste".
 - Give each recipe 2 to 4 lowercase tags such as vegetarian, gluten-free, quick, freezer-friendly, dinner, lunch.`;
 
+/** GET /api/recipes tells the page whether AI ideas are available, so it can hide the button when not. */
+export async function GET() {
+  return NextResponse.json({ configured: !!getAnthropic() });
+}
+
 export async function POST(req: Request) {
   const client = getAnthropic();
   if (!client) return NextResponse.json(AI_NOT_CONFIGURED, { status: 503 });

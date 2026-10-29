@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Plus, Share2, Trash2, X } from "lucide-react";
+import Link from "next/link";
+import { CalendarDays, Check, Plus, Share2, Trash2, X } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -85,6 +86,7 @@ export default function ListPage() {
   const removeListItem = useLarder((s) => s.removeListItem);
   const clearChecked = useLarder((s) => s.clearChecked);
   const addItems = useLarder((s) => s.addItems);
+  const plannerOn = useLarder((s) => s.settings.mealPlannerEnabled);
 
   const [editing, setEditing] = useState<ShoppingListItem | null>(null);
   const openedAt = useNow();
@@ -157,7 +159,8 @@ export default function ListPage() {
       const unknown = defaultsForUnknown(l.name);
       return {
         key: l.id,
-        name: l.name,
+        // A matched food gets its proper name ("Full cream milk", not "milk"); anything else keeps what was typed.
+        name: food?.name ?? l.name,
         foodTypeId: food?.id ?? null,
         emoji: food?.emoji ?? "🛒",
         locationId: food?.defaultLocation ?? unknown.locationId,
@@ -207,43 +210,28 @@ export default function ListPage() {
       <PageHeader
         title="Shopping list"
         subtitle={subtitle}
+        showSettings
         actions={
-          <IconButton label="Share list" onClick={share} disabled={!hydrated || open.length === 0}>
-            <Share2 size={20} />
-          </IconButton>
+          <>
+            {hydrated && plannerOn && (
+              <Link
+                href="/plan"
+                aria-label="Meal plan"
+                title="Meal plan"
+                className="inline-flex h-11 w-9 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
+              >
+                <CalendarDays size={22} aria-hidden />
+              </Link>
+            )}
+            <IconButton label="Share list" onClick={share} disabled={!hydrated || open.length === 0} className="w-9! lg:w-11!">
+              <Share2 size={20} />
+            </IconButton>
+          </>
         }
       />
 
       <div className="px-5 lg:px-0">
         <QuickAdd onAddFood={addFood} onAddText={addFreeText} />
-
-        {hydrated && suggestions.length > 0 && (
-          <section aria-labelledby="suggestions-heading" className="mt-5">
-            <h2 id="suggestions-heading" className="mb-2 text-sm font-medium text-ink-2">
-              Running low? One tap to add
-            </h2>
-            <div className="scrollbar-none -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-wrap lg:px-0">
-              {suggestions.map((s) => (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() =>
-                    s.food
-                      ? addFood(s.food)
-                      : (addToList([{ name: s.name, foodTypeId: null, aisle: "Other", reason: "manual" }]),
-                        toast(`Added ${s.name}`))
-                  }
-                  className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface pl-3 pr-3.5 text-sm font-medium text-ink transition-colors hover:border-primary hover:bg-primary-soft"
-                >
-                  <Plus size={15} aria-hidden className="text-primary" />
-                  {s.food?.emoji && <span aria-hidden>{s.food.emoji}</span>}
-                  {s.name}
-                  {s.why === "ran-out" && <span className="text-xs text-ink-3">ran out</span>}
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
 
         {!hydrated ? (
           <div className="mt-8 space-y-3" aria-busy>
@@ -255,7 +243,11 @@ export default function ListPage() {
           <EmptyState
             emoji="🧺"
             title="Your list is empty"
-            body="Add what you're running low on, pick ingredients from a recipe, or tap a suggestion above."
+            body={
+              suggestions.length > 0
+                ? "Add what you're running low on, pick ingredients from a recipe, or tap a suggestion below."
+                : "Add what you're running low on, or pick ingredients from a recipe."
+            }
           />
         ) : (
           <>
@@ -324,6 +316,34 @@ export default function ListPage() {
               </section>
             )}
           </>
+        )}
+
+        {hydrated && suggestions.length > 0 && (
+          <section aria-labelledby="suggestions-heading" className={cx(list.length === 0 ? "mt-2" : "mt-8")}>
+            <h2 id="suggestions-heading" className="mb-2 text-sm font-medium text-ink-2">
+              Running low? One tap to add
+            </h2>
+            <div className="scrollbar-none fade-x -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-wrap lg:px-0">
+              {suggestions.map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() =>
+                    s.food
+                      ? addFood(s.food)
+                      : (addToList([{ name: s.name, foodTypeId: null, aisle: "Other", reason: "manual" }]),
+                        toast(`Added ${s.name}`))
+                  }
+                  className="relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface pl-3 pr-3.5 text-sm font-medium text-ink transition-colors after:absolute after:-inset-y-1 after:inset-x-0 after:content-[''] hover:border-primary hover:bg-primary-soft"
+                >
+                  <Plus size={15} aria-hidden className="text-primary" />
+                  {s.food?.emoji && <span aria-hidden>{s.food.emoji}</span>}
+                  {s.name}
+                  {s.why === "ran-out" && <span className="text-xs text-ink-3">ran out</span>}
+                </button>
+              ))}
+            </div>
+          </section>
         )}
       </div>
 
@@ -503,6 +523,10 @@ function QuickAdd({ onAddFood, onAddText }: { onAddFood: (f: FoodType, q?: numbe
       onAddFood(matches[active], parsed.quantity);
     } else if (text.trim()) {
       onAddText(text);
+    } else {
+      // Nothing typed yet: the button stays live and just puts the cursor in the box.
+      inputRef.current?.focus();
+      return;
     }
     reset();
   };
@@ -543,7 +567,7 @@ function QuickAdd({ onAddFood, onAddText }: { onAddFood: (f: FoodType, q?: numbe
             enterKeyHint="done"
           />
         </div>
-        <Button type="submit" aria-label="Add to list" className="h-12 w-12 shrink-0 px-0" disabled={!text.trim()}>
+        <Button type="submit" aria-label="Add to list" className="h-12 w-12 shrink-0 px-0">
           <Plus size={22} aria-hidden />
         </Button>
       </div>

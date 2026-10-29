@@ -1,5 +1,6 @@
-import type { HouseholdProfile, ItemStatus, PantryItem, Recipe, RecipeIngredient } from "@/lib/types";
-import { getFoodType, normalise } from "@/lib/shelf-life/foods";
+import type { ItemStatus, PantryItem, Recipe, RecipeIngredient } from "@/lib/types";
+import { normalise } from "@/lib/shelf-life/foods";
+import { isRecipeAllowed, likeCount, type FilterProfile } from "./filter";
 
 /** The slice of an ItemView that ranking needs (keeps this module free of the store). */
 export interface RankableItem {
@@ -62,102 +63,9 @@ export function ingredientMatchesItem(ing: RecipeIngredient, item: PantryItem): 
   return a.every((t) => b.includes(t)) || b.every((t) => a.includes(t));
 }
 
-/* ---------- dietary filtering ---------- */
+/* ---------- dietary filtering (see filter.ts) ---------- */
 
-const MEAT = /\b(beef|mince|chicken|pork|bacon|lamb|ham|sausage|salami|steak|turkey|prosciutto|chorizo|veal|duck)\b/i;
-const SEAFOOD = /\b(fish|tuna|salmon|prawn|shrimp|barramundi|crab|squid|calamari|mussel|oyster|anchov|sardine|seafood|scallop)\b/i;
-const DAIRY = /\b(milk|cheese|cheddar|butter|cream|yoghurt|yogurt|parmesan|feta|mozzarella|ricotta|custard|ghee|halloumi)\b/i;
-const EGG = /\b(egg|eggs|mayonnaise)\b/i;
-const HONEY = /\b(honey)\b/i;
-const GLUTEN = /\b(flour|bread|breadcrumb|pasta|spaghetti|penne|noodle|wrap|couscous|barley|sourdough|toast|soy sauce|hoisin|schnitzel)\b/i;
-const NUTS = /\b(nut|nuts|peanut|almond|cashew|walnut|pecan|pistachio|hazelnut|macadamia)\b/i;
-const PORK = /\b(pork|bacon|ham|prosciutto|chorizo|salami|lard)\b/i;
-
-function categoryOf(ing: RecipeIngredient) {
-  return getFoodType(ing.foodTypeId)?.category;
-}
-
-function isMeat(i: RecipeIngredient) {
-  const c = categoryOf(i);
-  return MEAT.test(i.name) || (c === "meat" && !SEAFOOD.test(i.name));
-}
-function isSeafood(i: RecipeIngredient) {
-  return SEAFOOD.test(i.name) || categoryOf(i) === "seafood";
-}
-function isDairy(i: RecipeIngredient) {
-  return DAIRY.test(i.name) || categoryOf(i) === "dairy";
-}
-function isEgg(i: RecipeIngredient) {
-  return EGG.test(i.name) || categoryOf(i) === "eggs";
-}
-
-const ALLERGY_RULES: Array<{ keys: RegExp; test: (r: Recipe) => boolean }> = [
-  { keys: /dairy|milk|lactose/, test: (r) => r.ingredients.some(isDairy) },
-  { keys: /\begg/, test: (r) => r.ingredients.some(isEgg) },
-  { keys: /gluten|wheat|coeliac|celiac/, test: (r) => !r.tags.includes("gluten-free") && r.ingredients.some((i) => GLUTEN.test(i.name)) },
-  { keys: /nut|peanut|almond|cashew/, test: (r) => r.ingredients.some((i) => NUTS.test(i.name)) },
-  { keys: /shellfish|crustacean|prawn/, test: (r) => r.ingredients.some((i) => /prawn|shrimp|crab|lobster|mussel|oyster|scallop/i.test(i.name)) },
-  { keys: /fish|seafood/, test: (r) => r.ingredients.some(isSeafood) },
-  { keys: /soy/, test: (r) => r.ingredients.some((i) => /\bsoy\b|tofu|edamame/i.test(i.name)) },
-];
-
-function recipeText(r: Recipe): string {
-  return `${r.title} ${r.ingredients.map((i) => i.name).join(" ")}`.toLowerCase();
-}
-
-function wordIn(text: string, term: string): boolean {
-  const t = term.trim().toLowerCase();
-  if (!t) return false;
-  const stem = t.replace(/(es|s)$/, "");
-  return new RegExp(`\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(text);
-}
-
-/** Why a recipe is excluded for this household, or null when it is fine. */
-export function exclusionReason(recipe: Recipe, profile: Pick<HouseholdProfile, "diets" | "allergies" | "dislikes">): string | null {
-  const ings = recipe.ingredients.filter((i) => !i.optional);
-  const all = recipe.ingredients;
-  const text = recipeText(recipe);
-
-  for (const a of profile.allergies) {
-    const key = a.trim().toLowerCase();
-    if (!key) continue;
-    const rule = ALLERGY_RULES.find((r) => r.keys.test(key));
-    if ((rule && rule.test(recipe)) || wordIn(text, key)) return `Contains ${key}`;
-  }
-  for (const d of profile.dislikes) {
-    if (wordIn(text, d)) return `Has ${d.trim().toLowerCase()}`;
-  }
-  for (const diet of profile.diets) {
-    switch (diet) {
-      case "vegan":
-        if (all.some((i) => isMeat(i) || isSeafood(i) || isDairy(i) || isEgg(i) || HONEY.test(i.name))) return "Not vegan";
-        break;
-      case "vegetarian":
-        if (all.some((i) => isMeat(i) || isSeafood(i))) return "Not vegetarian";
-        break;
-      case "pescatarian":
-        if (all.some(isMeat)) return "Contains meat";
-        break;
-      case "gluten-free":
-        if (!recipe.tags.includes("gluten-free") && ings.some((i) => GLUTEN.test(i.name))) return "Contains gluten";
-        break;
-      case "dairy-free":
-        if (all.some(isDairy)) return "Contains dairy";
-        break;
-      case "halal":
-      case "kosher":
-        if (all.some((i) => PORK.test(i.name))) return "Contains pork";
-        break;
-      default:
-        break;
-    }
-  }
-  return null;
-}
-
-export function isRecipeAllowed(recipe: Recipe, profile: Pick<HouseholdProfile, "diets" | "allergies" | "dislikes">): boolean {
-  return exclusionReason(recipe, profile) === null;
-}
+export { allergenHits, dislikeHits, exclusionReason, isRecipeAllowed, termInText, type AllergenHit, type FilterProfile } from "./filter";
 
 /* ---------- ranking ---------- */
 
@@ -206,13 +114,14 @@ export function scoreOf(a: Omit<RankedRecipe, "score">): number {
 export function rankRecipes(
   recipes: Recipe[],
   views: RankableItem[],
-  profile: Pick<HouseholdProfile, "diets" | "allergies" | "dislikes">,
+  profile: FilterProfile,
 ): RankedRecipe[] {
   return recipes
     .filter((r) => isRecipeAllowed(r, profile))
     .map((r) => {
       const a = analyseRecipe(r, views);
-      return { ...a, score: scoreOf(a) };
+      // Foods the household likes nudge a recipe up, but never past a use-today ingredient.
+      return { ...a, score: scoreOf(a) + Math.min(1, likeCount(r, profile.likes) * 0.5) };
     })
     .sort(
       (a, b) =>

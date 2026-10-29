@@ -19,7 +19,8 @@ import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { draftKey, type BarcodeResponse, type ParseResponse, type ReviewDraft } from "@/lib/drafts";
 import { DEFAULT_SOURCE, isMethod, pendingSessions, useAddSession, type AddMethod } from "./session";
-import { ReviewList } from "./review-list";
+import { ReviewList, type MergePlan } from "./review-list";
+import { useAiConfigured } from "./ai-status";
 import { PhotoCapture } from "./photo-capture";
 import { PasteInput } from "./paste-input";
 import { BarcodeScanner } from "./barcode-scanner";
@@ -97,11 +98,16 @@ const PENDING_LABEL: Record<AddMethod, string> = {
   manual: "added by hand",
 };
 
-const SECONDARY: AddMethod[] = ["paste", "list", "barcode", "manual"];
+const PHOTO_METHODS: AddMethod[] = ["receipt", "list"];
 
 function Hub() {
   const [pending] = useState(pendingSessions);
-  const { Icon: ReceiptIcon } = META.receipt;
+  const ai = useAiConfigured();
+  // Without AI, photo reading can't work, so the paste flow leads and the photo options say they need setup.
+  const hero: AddMethod = ai === false ? "paste" : "receipt";
+  const secondary: AddMethod[] =
+    ai === false ? ["barcode", "manual", "receipt", "list"] : ["paste", "list", "barcode", "manual"];
+  const { Icon: HeroIcon } = META[hero];
 
   return (
     <>
@@ -128,15 +134,15 @@ function Hub() {
         )}
 
         <Link
-          href="/add?method=receipt"
+          href={`/add?method=${hero}`}
           className="group relative flex flex-col gap-4 overflow-hidden rounded-[var(--radius-card)] bg-primary p-6 text-primary-ink shadow-card sm:flex-row sm:items-center"
         >
           <span aria-hidden className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary-ink/15">
-            <ReceiptIcon size={28} strokeWidth={2} />
+            <HeroIcon size={28} strokeWidth={2} />
           </span>
           <span className="flex-1">
-            <span className="block font-display text-2xl leading-tight">Scan a receipt</span>
-            <span className="mt-1 block text-[15px] opacity-85">{META.receipt.blurb}</span>
+            <span className="block font-display text-2xl leading-tight">{META[hero].title}</span>
+            <span className="mt-1 block text-[15px] opacity-85">{META[hero].blurb}</span>
           </span>
           <span aria-hidden className="absolute right-5 top-6 opacity-70 transition-transform group-hover:translate-x-0.5 sm:static">
             <ChevronRight size={22} />
@@ -144,17 +150,28 @@ function Hub() {
         </Link>
 
         <ul className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface">
-          {SECONDARY.map((m) => {
+          {secondary.map((m) => {
             const { Icon, title, blurb } = META[m];
+            const needsSetup = ai === false && PHOTO_METHODS.includes(m);
             return (
               <li key={m}>
                 <Link href={`/add?method=${m}`} className="flex min-h-[4.5rem] items-center gap-4 px-4 py-3.5 hover:bg-surface-2">
-                  <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+                  <span
+                    aria-hidden
+                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${needsSetup ? "bg-surface-2 text-ink-3" : "bg-primary-soft text-primary"}`}
+                  >
                     <Icon size={21} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[16px] font-semibold text-ink">{title}</span>
-                    <span className="block text-sm text-ink-2">{blurb}</span>
+                    <span className="flex flex-wrap items-center gap-x-2 text-[16px] font-semibold text-ink">
+                      {title}
+                      {needsSetup && (
+                        <span className="rounded-full bg-surface-2 px-2 py-0.5 text-xs font-semibold text-ink-2">Needs setup</span>
+                      )}
+                    </span>
+                    <span className="block text-sm text-ink-2">
+                      {needsSetup ? "Photo reading isn’t switched on here yet." : blurb}
+                    </span>
                   </span>
                   <ChevronRight size={18} aria-hidden className="shrink-0 text-ink-3" />
                 </Link>
@@ -245,12 +262,19 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
     [setDrafts],
   );
 
-  function submit(included: ReviewDraft[]) {
-    if (included.length === 0) return;
+  function submit(fresh: ReviewDraft[], merges: MergePlan[]) {
+    if (fresh.length + merges.length === 0) return;
     setSubmitting(true);
-    const created = addItems(included, session.source);
+    const created = addItems(fresh, session.source, merges.length ? { merge: merges } : undefined);
     const n = created.length;
-    toast(`Added ${n} ${n === 1 ? "item" : "items"} to your larder`, { undoable: true });
+    const m = merges.length;
+    const message =
+      n === 0
+        ? `Topped up ${m} ${m === 1 ? "item" : "items"} in your larder`
+        : m === 0
+          ? `Added ${n} ${n === 1 ? "item" : "items"} to your larder`
+          : `Added ${n} ${n === 1 ? "item" : "items"}, topped up ${m}`;
+    toast(message, { undoable: true });
     clear();
     router.push("/pantry");
   }
@@ -263,6 +287,8 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   const backHref = inReview ? `/add?method=${method}` : "/add";
   const reviewTitle = method === "receipt" ? "Check your receipt" : method === "list" ? "Check your list" : "Check these items";
   const foodCount = drafts.filter((d) => d.isFood).length;
+  const showPrices =
+    session.source === "receipt" || session.source === "order" || drafts.some((d) => d.price !== undefined);
 
   return (
     <>
@@ -289,7 +315,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
       {inReview ? (
         <>
           {session.note && <InfoNotice className="mx-5 mb-4 lg:mx-0">{session.note}</InfoNotice>}
-          <ReviewList drafts={drafts} setDrafts={setDrafts} onSubmit={submit} submitting={submitting} />
+          <ReviewList drafts={drafts} setDrafts={setDrafts} onSubmit={submit} submitting={submitting} showPrices={showPrices} />
           <div className="mt-2 flex justify-center">
             <Button variant="ghost" onClick={startOver}>
               Discard and start over
@@ -350,6 +376,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
                     pendingKeys={pending}
                     allowRemove
                     submitting={submitting}
+                    showPrices={showPrices}
                   />
                 </>
               ) : (

@@ -30,6 +30,16 @@ function routeKey(pathname: string): string | undefined {
 }
 
 export function proxy(req: NextRequest) {
+  // A malformed escape in a barcode URL ("%E0%A4%A") would otherwise fail param decoding with a 500.
+  if (req.nextUrl.pathname.startsWith("/api/barcode/")) {
+    try {
+      decodeURIComponent(req.nextUrl.pathname);
+    } catch {
+      return json(400, "bad_code", "Barcodes are 6 to 14 digits. Check the number and try again.");
+    }
+    return NextResponse.next();
+  }
+
   const key = routeKey(req.nextUrl.pathname);
   if (!key || req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return NextResponse.next();
 
@@ -72,5 +82,5 @@ export function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/scan/:path*", "/api/parse-text/:path*", "/api/recipes/:path*"],
+  matcher: ["/api/scan/:path*", "/api/parse-text/:path*", "/api/recipes/:path*", "/api/barcode/:path*"],
 };

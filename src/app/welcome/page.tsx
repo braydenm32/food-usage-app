@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, PencilLine, Receipt, Sparkles, X } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { ArrowLeft, ClipboardPaste, CookingPot, Leaf, PencilLine, Receipt, Sparkles, X } from "lucide-react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { useLarder } from "@/lib/store";
 import type { Diet } from "@/lib/types";
 import { Button, Chip, Input, Stepper, cx } from "@/components/ui";
@@ -29,6 +29,21 @@ export default function WelcomePage() {
   const setSettings = useLarder((s) => s.setSettings);
   const loadDemoData = useLarder((s) => s.loadDemoData);
   const [allergyDraft, setAllergyDraft] = useState("");
+  // Whether photo reading is set up on this install. Until we know, assume it is.
+  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/scan")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { configured?: boolean } | null) => {
+        if (!cancelled && j && typeof j.configured === "boolean") setAiConfigured(j.configured);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const finish = (to: string) => {
     setSettings({ onboarded: true });
@@ -53,8 +68,8 @@ export default function WelcomePage() {
   return (
     <div className="flex min-h-dvh flex-col bg-paper">
       {/* Top bar: progress + skip */}
-      <div className="flex items-center justify-between gap-4 px-5 pt-[calc(1rem+env(safe-area-inset-top))] lg:mx-auto lg:w-full lg:max-w-xl lg:px-0 lg:pt-10">
-        <div className="flex items-center gap-3">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-5 pt-[calc(1rem+env(safe-area-inset-top))] lg:mx-auto lg:w-full lg:max-w-xl lg:px-0 lg:pt-10">
+        <div className="flex items-center justify-start">
           {step > 0 ? (
             <button
               type="button"
@@ -67,35 +82,38 @@ export default function WelcomePage() {
           ) : (
             <span className="font-display text-xl text-ink">Larder</span>
           )}
-          <ol className="flex items-center gap-1.5" aria-label={`Step ${step + 1} of ${STEPS.length}: ${STEPS[step]}`}>
+        </div>
+        {/* Step indicator sits on its own in the middle, away from the logo. */}
+        <div className="flex items-center gap-2.5" aria-label={`Step ${step + 1} of ${STEPS.length}: ${STEPS[step]}`} role="group">
+          <ol className="flex items-center gap-1.5" aria-hidden>
             {STEPS.map((label, i) => (
               <li
                 key={label}
-                aria-current={i === step ? "step" : undefined}
                 className={cx(
                   "h-1.5 rounded-full transition-all",
                   i === step ? "w-6 bg-primary" : i < step ? "w-2.5 bg-primary/50" : "w-2.5 bg-line",
                 )}
-              >
-                <span className="sr-only">{label}</span>
-              </li>
+              />
             ))}
           </ol>
-          <span className="text-xs text-ink-3">
+          <span className="text-xs tabular-nums text-ink-3" aria-hidden>
             {step + 1} of {STEPS.length}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => finish("/")}
-          className="flex h-11 items-center gap-1 rounded-full px-3 text-sm font-medium text-ink-2 hover:bg-surface-2 hover:text-ink"
-        >
-          Skip
-          <X size={16} aria-hidden />
-        </button>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => finish("/")}
+            className="-mr-3 flex h-11 items-center gap-1 rounded-full px-3 text-sm font-medium text-ink-2 hover:bg-surface-2 hover:text-ink"
+          >
+            Skip
+            <X size={16} aria-hidden />
+          </button>
+        </div>
       </div>
 
-      <main className="flex flex-1 flex-col px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] lg:mx-auto lg:w-full lg:max-w-xl lg:px-0">
+      {/* A div, not <main>: the app shell already provides the page's main landmark. */}
+      <div className="flex flex-1 flex-col px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] lg:mx-auto lg:w-full lg:max-w-xl lg:px-0">
         {step === 0 && (
           <section aria-labelledby="w-step-1" className="flex flex-1 flex-col justify-center py-10">
             <h1 id="w-step-1" className="font-display text-[2.6rem] leading-[1.05] text-ink sm:text-[3.4rem] lg:text-[4rem]">
@@ -108,15 +126,15 @@ export default function WelcomePage() {
             </p>
             <ul className="mt-8 grid gap-3 text-[15px] text-ink-2 sm:grid-cols-3">
               {[
-                { emoji: "🧾", text: "Add a whole shop from a receipt in seconds" },
-                { emoji: "🥬", text: "See what to use today, honestly estimated" },
-                { emoji: "🍳", text: "Get recipes for what's about to turn" },
-              ].map((f) => (
-                <li key={f.text} className="flex items-start gap-3 rounded-2xl bg-surface p-3">
-                  <span aria-hidden className="text-2xl leading-none">
-                    {f.emoji}
+                { Icon: Receipt, tint: "bg-primary-soft text-primary", text: "Add a whole shop from a receipt in seconds" },
+                { Icon: Leaf, tint: "bg-fresh-soft text-fresh", text: "See what to use today, honestly estimated" },
+                { Icon: CookingPot, tint: "bg-soon-soft text-soon", text: "Get recipes for what's about to turn" },
+              ].map(({ Icon, tint, text }) => (
+                <li key={text} className="flex items-center gap-3 rounded-2xl bg-surface p-3 sm:flex-col sm:items-start">
+                  <span aria-hidden className={cx("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", tint)}>
+                    <Icon size={20} />
                   </span>
-                  <span>{f.text}</span>
+                  <span>{text}</span>
                 </li>
               ))}
             </ul>
@@ -229,14 +247,26 @@ export default function WelcomePage() {
             <p className="mt-2 text-[15px] text-ink-2">Pick one. The others are always a tap away from the Add button.</p>
 
             <div className="mt-8 flex flex-col gap-3">
-              <StartOption
-                href="/add?method=receipt"
-                onClick={() => setSettings({ onboarded: true })}
-                Icon={Receipt}
-                title="Scan your last receipt"
-                body="Snap a photo and Larder reads the lines, matches the food and estimates the dates."
-                primary
-              />
+              {aiConfigured === false ? (
+                // Photo reading isn't set up on this install, so pasting is the quickest honest start.
+                <StartOption
+                  href="/add?method=paste"
+                  onClick={() => setSettings({ onboarded: true })}
+                  Icon={ClipboardPaste}
+                  title="Paste a list"
+                  body="Paste an online order or a list of what you bought. Larder sorts it into the larder with estimated dates."
+                  primary
+                />
+              ) : (
+                <StartOption
+                  href="/add?method=receipt"
+                  onClick={() => setSettings({ onboarded: true })}
+                  Icon={Receipt}
+                  title="Scan your last receipt"
+                  body="Snap a photo and Larder reads the lines, matches the food and estimates the dates."
+                  primary
+                />
+              )}
               <StartOption
                 href="/add?method=manual"
                 onClick={() => setSettings({ onboarded: true })}
@@ -269,7 +299,7 @@ export default function WelcomePage() {
             </p>
           </section>
         )}
-      </main>
+      </div>
     </div>
   );
 }

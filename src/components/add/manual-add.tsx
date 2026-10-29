@@ -5,7 +5,7 @@ import { Plus, Search, Type } from "lucide-react";
 import { Input, cx } from "@/components/ui";
 import { useLarder } from "@/lib/store";
 import { FOOD_TYPES, getFoodType, searchFoodTypes } from "@/lib/shelf-life/foods";
-import { foodToDraft, freeTextDraft, type ReviewDraft } from "@/lib/drafts";
+import { foodToDraft, freeTextDraft, withLastAdded, type ReviewDraft } from "@/lib/drafts";
 import type { FoodType } from "@/lib/types";
 
 interface Quick {
@@ -23,6 +23,7 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
   const listId = useId();
   const inputId = useId();
   const events = useLarder((s) => s.events);
+  const locations = useLarder((s) => s.locations);
 
   const results = useMemo(() => searchFoodTypes(query, 8), [query]);
   const trimmed = query.trim();
@@ -53,7 +54,9 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
   }, [events]);
   const hasHistory = events.some((e) => e.type === "added");
 
-  function add(d: ReviewDraft) {
+  function add(picked: ReviewDraft) {
+    // Same spot and amount as last time this food was added.
+    const d = withLastAdded(picked, events, locations.map((l) => l.id));
     onAdd(d);
     setLastAdded(d.name);
     setQuery("");

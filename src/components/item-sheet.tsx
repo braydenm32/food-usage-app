@@ -1,10 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Lightbulb, PackageOpen, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CircleAlert, Lightbulb, PackageOpen, Snowflake, Trash2, X } from "lucide-react";
 import { useLarder } from "@/lib/store";
 import { useItemView, type ItemView } from "@/lib/selectors";
-import { daysBetween, describeDaysLeft, effectiveDays, parseLocalDate } from "@/lib/shelf-life/engine";
+import {
+  daysBetween,
+  describeDaysLeft,
+  effectiveDays,
+  freezerNotRecommended,
+  isPastDateForFreezing,
+  parseLocalDate,
+  storageWarning,
+} from "@/lib/shelf-life/engine";
 import type { DateKind, ShelfLifeOverride } from "@/lib/types";
 import { Button, Chip, Input, Segmented, Sheet, Stepper, cx } from "@/components/ui";
 import { StatusPill } from "@/components/freshness";
@@ -18,8 +26,11 @@ import {
 } from "@/components/pantry/format";
 import { capitalise, markBinned, markOpened, markUsed, moveTo, removeItem } from "@/components/pantry/actions";
 import { OverflowMenu } from "@/components/pantry/overflow-menu";
+import { LocationIcon } from "@/components/pantry/location-icon";
+import { toast } from "@/components/toast";
 
-type DaysColumn = "pantryDays" | "fridgeDays" | "freezerDays" | "openedDays";
+type DaysColumn = "pantryDays" | "fridgeDays";
+export type SheetIntent = "still-good" | "edit-date";
 
 interface RememberOffer {
   column: DaysColumn;
@@ -44,8 +55,8 @@ function stepFor(unit: string, quantity: number) {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Details and actions for one item. Pass `intent="still-good"` to lead with
- * setting a new date (used by "Still good" on the Today screen).
+ * Details and actions for one item. Pass `intent="still-good"` to lead with setting a new
+ * date (used by "Still good" on the Today screen), or `"edit-date"` to just focus the date.
  */
 export function ItemSheet({
   itemId,
@@ -56,22 +67,10 @@ export function ItemSheet({
   itemId: string | null;
   open: boolean;
   onClose: () => void;
-  intent?: "still-good";
+  intent?: SheetIntent;
 }) {
   const view = useItemView(itemId ?? "");
   const isOpen = open && !!view;
-  // Toasts sit under the modal dialog, so the sheet shows its own feedback while open.
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const notify = useCallback<NotifyFn>(
-    (message, undoable = true) => setNotice({ key: Date.now(), itemId: itemId ?? "", message, undoable }),
-    [itemId],
-  );
-  useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 6000);
-    return () => clearTimeout(t);
-  }, [notice]);
-  const shownNotice = notice && notice.itemId === itemId ? notice : null;
 
   // The item can disappear while the sheet is open (Undo, used elsewhere): close cleanly.
   useEffect(() => {
@@ -79,32 +78,21 @@ export function ItemSheet({
   }, [open, itemId, view, onClose]);
 
   return (
-    <Sheet open={isOpen} onClose={onClose} title={view?.item.name ?? ""} footer={
-        view && (
-          <Footer
-            view={view}
-            onClose={onClose}
-            notify={notify}
-            notice={shownNotice}
-            onDismissNotice={() => setNotice(null)}
-          />
-        )
-      }
+    <Sheet
+      open={isOpen}
+      onClose={onClose}
+      title={view?.item.name ?? ""}
+      footer={view && <Footer view={view} onClose={onClose} />}
     >
-      {view && <Body key={view.item.id} view={view} intent={intent} notify={notify} />}
+      {view && <Body key={view.item.id} view={view} intent={intent} />}
     </Sheet>
   );
 }
 
-interface Notice {
-  key: number;
-  itemId: string;
-  message: string;
-  undoable: boolean;
-}
-type NotifyFn = (message: string, undoable?: boolean) => void;
+/** Feedback inside the sheet: toasts render above the open dialog, with Undo where it applies. */
+const notify = (message: string, undoable = true) => toast(message, { undoable });
 
-function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good"; notify: NotifyFn }) {
+function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
   const { item, food, location, expiry } = view;
   const locations = useLarder((s) => s.locations);
   const overrides = useLarder((s) => s.overrides);
@@ -117,7 +105,7 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
   const dateRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (intent === "still-good") dateRef.current?.focus({ preventScroll: false });
+    if (intent) dateRef.current?.focus({ preventScroll: false });
   }, [intent]);
 
   const kind = location?.kind ?? "fridge";
@@ -153,27 +141,14 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
     }
     const wasEstimate = expiry.estimated;
     updateItem(item.id, { printedDate: value });
-    if (!wasEstimate || !food || item.thawedAt) return setOffer(null);
+    // Only learn from a sealed item in the pantry or fridge: when it is frozen, thawed or
+    // opened, that clock decides the date, not the one on the pack.
+    if (!wasEstimate || !food || frozen || item.thawedAt || item.openedAt) return setOffer(null);
 
-    let column: DaysColumn;
-    let start: string;
-    let phrase: string;
-    const foodName = food.name.toLowerCase();
-    if (frozen) {
-      column = "freezerDays";
-      start = item.frozenAt ?? item.addedAt;
-      phrase = `${foodName} in the freezer`;
-    } else if (item.openedAt) {
-      column = "openedDays";
-      start = item.openedAt;
-      phrase = `${foodName} once opened`;
-    } else {
-      column = `${kind}Days` as DaysColumn;
-      start = item.addedAt;
-      phrase = `${foodName} in the ${kind}`;
-    }
-    const days = daysBetween(new Date(start), parseLocalDate(value));
-    const current = effectiveDays(food, overrides[food.id], column.replace("Days", "") as "pantry" | "fridge" | "freezer" | "opened");
+    const column = `${kind}Days` as DaysColumn;
+    const phrase = `${food.name.toLowerCase()} in the ${kind}`;
+    const days = daysBetween(new Date(item.addedAt), parseLocalDate(value));
+    const current = effectiveDays(food, overrides[food.id], kind as "pantry" | "fridge");
     if (days < 1 || days === current) return setOffer(null);
     setOffer({ column, days, foodTypeId: food.id, phrase });
   };
@@ -186,6 +161,23 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
   };
 
   const dateLabel = item.dateKind === "use-by" ? "Use by" : "Best before";
+
+  // Storage advice for where it is now, shown once (not repeated in the basis line).
+  const spotWarning = item.expiredWhenFrozen ? undefined : storageWarning(food, kind);
+  const basis = spotWarning
+    ? expiry.basis.replace(spotWarning, "").replace(/^[.\s]+|[.\s]+$/g, "")
+    : expiry.basis;
+  const hasFreezer = locations.some((l) => l.kind === "freezer");
+  // Before freezing: say when it won't help.
+  const pastDate =
+    !frozen && hasFreezer && isPastDateForFreezing(item, { food, override: food ? overrides[food.id] : undefined, location });
+  const freezeHint = frozen || !hasFreezer
+    ? undefined
+    : pastDate
+      ? "Already past its date, so freezing won't make it safe."
+      : freezerNotRecommended(food)
+        ? `${food?.name ?? "This"} doesn't freeze well — texture suffers.`
+        : undefined;
 
   return (
     <div className="flex flex-col gap-6 pt-1">
@@ -229,7 +221,7 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
                 <span className="rounded-full bg-surface-2 px-2 py-0.5 font-sans text-xs font-semibold text-ink-2">est.</span>
               )}
             </p>
-            <p className="mt-1 text-sm text-ink-2">{expiry.basis}</p>
+            {basis && <p className="mt-1 text-sm text-ink-2">{basis}</p>}
           </div>
           {!item.openedAt && !frozen && (
             <Button variant="secondary" size="sm" onClick={() => markOpened(item.id, notify)} className="shrink-0">
@@ -272,6 +264,11 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
               { value: "best-before", label: "Best before" },
             ]}
           />
+          {(frozen || item.thawedAt) && item.printedDate && (
+            <p className="text-xs text-ink-3">
+              {frozen ? "While it's frozen, the freezer date applies." : "Once thawed, the thaw date applies."}
+            </p>
+          )}
           <p className="text-xs text-ink-3">
             {item.dateKind === "use-by"
               ? "Use-by is about safety: don't eat it after this date."
@@ -310,7 +307,7 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
               value: l.id,
               label: (
                 <>
-                  {l.emoji && <span aria-hidden>{l.emoji}</span>}
+                  <LocationIcon kind={l.kind} />
                   {l.name}
                 </>
               ),
@@ -320,12 +317,45 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
           <div className="flex flex-wrap gap-2">
             {locations.map((l) => (
               <Chip key={l.id} selected={l.id === item.locationId} onClick={() => moveTo(item.id, l.id, notify)}>
-                {l.emoji && <span aria-hidden>{l.emoji}</span>}
+                <LocationIcon kind={l.kind} />
                 {l.name}
               </Chip>
             ))}
           </div>
         )}
+        {item.expiredWhenFrozen ? (
+          <div className="flex flex-col items-start gap-2 rounded-2xl bg-spoiled-soft px-4 py-3 text-sm text-ink">
+            <p className="flex gap-2">
+              <CircleAlert size={18} aria-hidden className="mt-0.5 shrink-0 text-spoiled" />
+              <span>It was already past its date when it went in the freezer. Freezing won&apos;t make it safe.</span>
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="-ml-2"
+              onClick={() => {
+                updateItem(item.id, { expiredWhenFrozen: undefined });
+                notify("Okay, counting from when it was frozen", false);
+              }}
+            >
+              It was still in date
+            </Button>
+          </div>
+        ) : spotWarning ? (
+          <p className="flex gap-2 rounded-2xl bg-soon-soft px-4 py-3 text-sm text-ink">
+            <CircleAlert size={18} aria-hidden className="mt-0.5 shrink-0 text-soon" />
+            {spotWarning}
+          </p>
+        ) : freezeHint ? (
+          <p className="flex gap-2 text-sm text-ink-2">
+            {pastDate ? (
+              <CircleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-spoiled" />
+            ) : (
+              <Snowflake size={16} aria-hidden className="mt-0.5 shrink-0 text-ink-3" />
+            )}
+            {freezeHint}
+          </p>
+        ) : null}
       </section>
 
       {/* Quantity */}
@@ -394,21 +424,8 @@ function Body({ view, intent, notify }: { view: ItemView; intent?: "still-good";
   );
 }
 
-function Footer({
-  view,
-  onClose,
-  notify,
-  notice,
-  onDismissNotice,
-}: {
-  view: ItemView;
-  onClose: () => void;
-  notify: NotifyFn;
-  notice: Notice | null;
-  onDismissNotice: () => void;
-}) {
+function Footer({ view, onClose }: { view: ItemView; onClose: () => void }) {
   const { item } = view;
-  const performUndo = useLarder((s) => s.performUndo);
   const consumeItem = useLarder((s) => s.consumeItem);
   const [some, setSome] = useState(false);
   const half = round2(item.quantity / 2);
@@ -431,36 +448,6 @@ function Footer({
 
   return (
     <div className="flex flex-col gap-3">
-      <div aria-live="polite" className="empty:hidden">
-        {notice && (
-          <div
-            key={notice.key}
-            className="animate-toast-in flex items-center gap-3 rounded-2xl bg-ink py-2 pl-4 pr-2 text-sm text-paper"
-          >
-            <span className="flex-1">{notice.message}</span>
-            {notice.undoable && (
-              <button
-                type="button"
-                onClick={() => {
-                  performUndo();
-                  onDismissNotice();
-                }}
-                className="h-9 rounded-lg px-2 font-semibold underline-offset-2 hover:underline"
-              >
-                Undo
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onDismissNotice}
-              aria-label="Dismiss"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg opacity-70 hover:opacity-100"
-            >
-              <X size={16} aria-hidden />
-            </button>
-          </div>
-        )}
-      </div>
       {some && (
         <div className="flex flex-col gap-3 rounded-2xl bg-surface-2 p-3">
           <p className="text-sm font-medium text-ink">How much did you use?</p>
@@ -484,8 +471,7 @@ function Footer({
           </div>
           <div className="flex gap-2">
             <Button size="sm" onClick={useSome}>
-              Mark {formatAmount(Math.min(amount, item.quantity))}
-              {item.unit === "item" ? "" : ` ${item.unit}`} used
+              Mark {item.unit === "item" ? formatAmount(Math.min(amount, item.quantity)) : formatQuantity(Math.min(amount, item.quantity), item.unit)} used
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setSome(false)}>
               Cancel

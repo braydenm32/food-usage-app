@@ -4,7 +4,7 @@
 
 import { defaultsForUnknown } from "./shelf-life/engine";
 import { getFoodType, matchFoodType } from "./shelf-life/foods";
-import type { DraftItem, FoodType, Unit } from "./types";
+import type { DraftItem, FoodType, ItemEvent, LocationId, PantryItem, Unit } from "./types";
 
 /** One line read from a receipt, list, order email or barcode lookup, before matching. */
 export interface ParsedLine {
@@ -27,6 +27,13 @@ export interface ParsedLine {
 /** A DraftItem with the extra bits the review screen needs. */
 export interface ReviewDraft extends DraftItem {
   isFood: boolean;
+  /**
+   * A weak match we didn't trust enough to apply. The line keeps the shopper's own name and
+   * review offers "Did you mean …?".
+   */
+  suggestion?: { foodTypeId: string; name: string; emoji: string };
+  /** When set, this line tops up that existing larder item instead of adding a new one. */
+  mergeIntoId?: string;
 }
 
 /* ---------- Units ---------- */
@@ -92,6 +99,16 @@ function sameDimension(a: Unit, b: Unit): boolean {
   const mass = (u: Unit) => u === "g" || u === "kg";
   const vol = (u: Unit) => u === "ml" || u === "L";
   return (mass(a) && mass(b)) || (vol(a) && vol(b));
+}
+
+/** True when an amount in `a` can be converted to `b` (same unit, or g↔kg, ml↔L). */
+export function compatibleUnits(a: Unit, b: Unit): boolean {
+  return a === b || sameDimension(a, b);
+}
+
+/** Convert between g/kg and ml/L; other units pass through unchanged. */
+export function convertQuantity(q: number, from: Unit, to: Unit): number {
+  return round(convert(q, from, to));
 }
 
 function convert(q: number, from: Unit, to: Unit): number {
@@ -198,6 +215,16 @@ export function resolveQuantity(
   if (food) {
     const fu = food.defaultUnit;
     if (isCountUnit(fu)) {
+      const packs = count ?? 1;
+      // "12pk" / "6 pack" arrive as a size in items: how many are inside one pack.
+      if (size && size.unit === "item") {
+        if (fu === "dozen") return { quantity: round((size.quantity * packs) / 12), unit: "dozen" };
+        if (fu === "item" || fu === "tin" || fu === "jar" || fu === "bottle") return { quantity: size.quantity * packs, unit: fu };
+        return { quantity: packs, unit: fu }; // a 6-pack of rolls is still one pack
+      }
+      if (size && size.unit === "dozen" && fu === "item") return { quantity: size.quantity * 12 * packs, unit: "item" };
+      // Loose produce sold by weight ("tomatoes 1kg"): keep the weight rather than guessing a count.
+      if (fu === "item" && !count && size && !isCountUnit(size.unit)) return size;
       // Counted foods (eggs, bread, tins): track how many, not the pack weight.
       if (count) return { quantity: count, unit: fu };
       if (size && size.unit === fu) return { quantity: size.quantity, unit: fu };
@@ -234,11 +261,13 @@ export function tidyName(name: string): string {
 
 export function lineToDraft(line: ParsedLine): ReviewDraft {
   const isFood = line.isFood ?? !isLikelyNonFood(`${line.name} ${line.rawText ?? ""}`);
-  const match = isFood ? matchFoodType(line.name) ?? (line.rawText ? matchFoodType(line.rawText) : undefined) : undefined;
-  const food = match?.food;
+  const match = isFood ? bestMatch(line.name, line.rawText) : undefined;
+  // A low-confidence match is a guess: keep the shopper's own name and only suggest the food.
+  const food = match && match.confidence !== "low" ? match.food : undefined;
   const { quantity, unit } = resolveQuantity(line, food);
 
   if (!food) {
+    const guess = match?.food;
     return {
       key: draftKey(),
       rawText: line.rawText,
@@ -252,6 +281,7 @@ export function lineToDraft(line: ParsedLine): ReviewDraft {
       include: isFood,
       confidence: "low",
       isFood,
+      ...(guess && looksLike(line.name, guess) ? { suggestion: { foodTypeId: guess.id, name: guess.name, emoji: guess.emoji } } : {}),
     };
   }
 
@@ -268,9 +298,46 @@ export function lineToDraft(line: ParsedLine): ReviewDraft {
     printedDate: line.printedDate,
     dateKind: food.dateKind,
     include: true,
-    confidence: match.confidence,
+    confidence: match?.confidence ?? "high",
     isFood: true,
   };
+}
+
+/** Words that say nothing about which food it is, so they can't carry a "Did you mean" on their own. */
+const GENERIC_WORDS = new Set(["fresh", "frozen", "piece", "pieces", "root", "whole", "sliced", "diced", "loose", "large", "small", "bag", "pack", "organic", "free", "range", "baby", "mini", "red", "green", "white", "brown"]);
+
+/** Edit distance with an early exit, for short words. */
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * Only suggest a weak match when one of the shopper's words is a near-spelling of a telling word in
+ * the food's name ("gnger" → ginger), not when the overlap is a generic word like "pieces".
+ */
+function looksLike(text: string, food: FoodType): boolean {
+  const words = (s: string) => s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
+  const theirs = words(text);
+  const ours = [food.name, ...food.aliases].flatMap(words);
+  return theirs.some((w) => ours.some((o) => o === w || o.startsWith(w) || editDistance(w, o) <= (o.length >= 6 ? 2 : 1)));
+}
+
+/** Match on the cleaned name, falling back to the raw line when the name matches nothing or only weakly. */
+function bestMatch(name: string, rawText?: string) {
+  const byName = matchFoodType(name);
+  if (byName && byName.confidence !== "low") return byName;
+  const byRaw = rawText && rawText !== name ? matchFoodType(rawText) : undefined;
+  if (byRaw && (!byName || byRaw.score > byName.score)) return byRaw;
+  return byName;
 }
 
 /** Draft for a food picked by hand from search. */
@@ -315,7 +382,53 @@ export function applyFoodType(draft: ReviewDraft, foodTypeId: string): ReviewDra
     confidence: "high",
     isFood: true,
     include: true,
+    suggestion: undefined,
+    mergeIntoId: undefined,
   };
+}
+
+/* ---------- Smart defaults and duplicates ---------- */
+
+/**
+ * Use where and how much this food went last time ("added" events record both), so a manual add
+ * or "Add again" lands in the usual spot. `locationIds` are the household's current spots.
+ */
+export function withLastAdded(draft: ReviewDraft, events: ItemEvent[], locationIds: LocationId[]): ReviewDraft {
+  const key = draft.foodTypeId ?? draft.name.toLowerCase();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.type !== "added") continue;
+    if ((e.foodTypeId ?? e.itemName.toLowerCase()) !== key) continue;
+    const next = { ...draft };
+    if (e.locationId && locationIds.includes(e.locationId)) next.locationId = e.locationId;
+    if (e.quantity && e.quantity > 0 && e.unit) {
+      next.quantity = e.quantity;
+      next.unit = e.unit;
+    }
+    return next;
+  }
+  return draft;
+}
+
+/**
+ * An unopened larder item this draft could top up: same food, same spot, same printed date,
+ * never opened or thawed, and an amount we can add to.
+ */
+export function findMergeTarget(
+  draft: Pick<ReviewDraft, "foodTypeId" | "locationId" | "printedDate" | "unit">,
+  items: PantryItem[],
+): PantryItem | undefined {
+  if (!draft.foodTypeId) return undefined;
+  return items.find(
+    (i) =>
+      i.foodTypeId === draft.foodTypeId &&
+      i.locationId === draft.locationId &&
+      !i.openedAt &&
+      !i.thawedAt &&
+      !i.expiredWhenFrozen &&
+      (i.printedDate ?? "") === (draft.printedDate ?? "") &&
+      compatibleUnits(draft.unit, i.unit),
+  );
 }
 
 /* ---------- Local text parser ---------- */
@@ -335,7 +448,7 @@ const EMAIL_NOISE: RegExp[] = [
   /\b(abn|acn)\b\s*[\d ]{6,}/,
   /^(qty|quantity|price|item|items|product|description|unit price|amount)\s*$/,
   /^(substitut(ed|ions?)|unavailable items?|out of stock items?|items? you ordered|items? we couldn'?t)\s*:?\s*$/,
-  /^(woolworths|coles|aldi|iga|harris farm)(\s+(online|supermarkets?|group|ltd|limited|pty))*\s*$/,
+  /^(woolworths|coles|aldi|iga|harris farm)(\s+(online|supermarkets?|group|ltd|limited|pty|order|delivery))*\s*$/,
   /^(questions\?|need help\?|manage (your )?order|track (your )?order|download (the )?app|shop now|view order)/,
   /^(mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+\d/,
   /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/,
@@ -350,8 +463,20 @@ const EMAIL_NOISE: RegExp[] = [
 
 /** Lines that only add detail to the product line above them. */
 const QTY_ONLY = /^(?:qty|quantity|x)\s*[:x]?\s*(\d+(?:\.\d+)?)\s*$/i;
-const PRICE_ONLY = /^(?:(?:\d+\s*(?:x|@)\s*)?\$\s?\d+(?:\.\d{1,2})?(?:\s*(?:ea|each|\/\s*(?:kg|ea)))?\s*)+$/i;
-const UNAVAILABLE = /^(?:unavailable|out of stock|not available|refunded|removed|cancelled|item unavailable)\b/i;
+/** "$6.20", "2 x $3.10 $6.20", "2 x $13.00 / $26.00", "2 for $10", "$3.90/kg". */
+const PRICE_ONLY =
+  /^(?:(?:\d+\s*(?:x|×|@|for)\s*)?\$\s?\d+(?:\.\d{1,2})?(?:\s*(?:ea|each|\/\s*(?:kg|ea)))?\s*(?:[/=]\s*)?)+$/i;
+/** "Unavailable", "Item unavailable: Raspberries 125g", "Out of stock - Lite milk". */
+const UNAVAILABLE =
+  /^(?:item\s+|product\s+)?(?:unavailable|out of stock|not available|refunded|removed|cancelled|no longer available)\b\s*(?:[:\-–—]\s*(.*))?$/i;
+/** "Raspberries 125g - unavailable", "Lite milk (out of stock)". */
+const UNAVAILABLE_SUFFIX = /[\s\-–—(:]+(?:unavailable|out of stock|not available|refunded)\)?\s*$/i;
+/** Section headings that list missing items: everything under them until the next heading is skipped. */
+const UNAVAILABLE_HEADING =
+  /^(?:unavailable|out of stock|missing|refunded|not supplied)(?:\s+(?:items?|products?)\s*:?|\s*:)\s*$|^items? (?:we couldn'?t|not) (?:supply|supplied|available)\b.*$/i;
+/** Headings that start an ordinary section again. */
+const SECTION_HEADING =
+  /^(?:your (?:items|order)|items? (?:delivered|ordered|picked|supplied|in (?:your|this) order)|delivered items?|order (?:summary|details)|substitut(?:ed|ions?)(?:\s+items?)?|sub ?total|total)\b.*$/i;
 
 const BULLET = /^\s*(?:[-*•·▪◦‣⁃–—>]+|\[\s?[x✓ ]?\s?\]|☐|☑|✓|✔|\d{1,3}[.)])\s+/i;
 
@@ -364,6 +489,8 @@ const TRAILING_PRICE_RE = /\s+(\d+\.\d{2})\s*$/;
 const COUNT_PREFIX = /^(\d+(?:\.\d+)?)\s*(?:x|×|\*)\s*(?=\S)/i; // "2x milk", "2 x milk"
 const COUNT_SUFFIX = /\s*(?:x|×|\*)\s*(\d+)\s*$/i; // "milk x2"
 const COUNT_WORD_PREFIX = /^(\d+)\s+(?=[a-z])/i; // "3 apples"
+/** Multi-buy fragment left after the line total: "2 x $13.00", "2 @ $13.00 ea /". */
+const MULTIBUY_RE = /\s*(\d+)\s*(?:x|×|@|for)\s*\$\s?\d+(?:\.\d{1,2})?(?:\s*(?:ea|each))?\s*[/=]?\s*$/i;
 const WORD_NUMBERS: Record<string, number> = {
   a: 1,
   an: 1,
@@ -401,17 +528,24 @@ export function parseLine(input: string): ParsedLine | null {
       text = text.slice(0, tm.index).trim();
     }
   }
-  // Strip "@ $2.00 each"/"@ 2.00" unit-price fragments.
-  text = text.replace(/\s*@\s*\$?\d+(?:\.\d+)?(?:\s*(?:ea|each|\/\s*kg))?/i, "").trim();
-
   let count: number | undefined;
   let size: ParsedLine["size"];
 
-  const cp = text.match(COUNT_PREFIX);
+  // Multi-buy: "Beef mince 1kg 2 x $13.00 / $26.00" → count 2, line total 26.
+  text = text.replace(/\s*[/=]\s*$/, "");
+  const mb = text.match(MULTIBUY_RE);
+  if (mb && /[a-z]{2,}/i.test(text.slice(0, mb.index))) {
+    count = Number(mb[1]);
+    text = text.slice(0, mb.index).trim();
+  }
+  // Strip "@ $2.00 each"/"@ 2.00" unit-price fragments.
+  text = text.replace(/\s*@\s*\$?\d+(?:\.\d+)?(?:\s*(?:ea|each|\/\s*kg))?/i, "").trim();
+
+  const cp = count === undefined ? text.match(COUNT_PREFIX) : null;
   if (cp) {
     count = Number(cp[1]);
     text = text.slice(cp[0].length).trim();
-  } else {
+  } else if (count === undefined) {
     const cs = text.match(COUNT_SUFFIX);
     if (cs) {
       count = Number(cs[1]);
@@ -432,8 +566,14 @@ export function parseLine(input: string): ParsedLine | null {
     const sm = text.match(SIZE_RE);
     if (sm) {
       const unit = normaliseUnit(sm[2]);
-      if (unit) {
-        size = { quantity: Number(sm[1]), unit };
+      const n = Number(sm[1]);
+      // "12pk" / "6 pack" (singular) says how many are in the pack; "2 packs" is a count of packs.
+      const packOf = unit === "pack" && n >= 2 && !/s$/i.test(sm[2]);
+      if (packOf) {
+        size = { quantity: n, unit: "item" };
+        text = (text.slice(0, sm.index) + " " + text.slice((sm.index ?? 0) + sm[0].length)).trim();
+      } else if (unit) {
+        size = { quantity: n, unit };
         text = (text.slice(0, sm.index) + " " + text.slice((sm.index ?? 0) + sm[0].length)).trim();
       }
     }
@@ -445,7 +585,10 @@ export function parseLine(input: string): ParsedLine | null {
       .sort((a, b) => b.length - a.length)
       .find((w) => lower.startsWith(`${w} `));
     if (word && word !== "a" && word !== "an") {
-      count = WORD_NUMBERS[word];
+      // "a dozen eggs" / "half a dozen eggs" are amounts in items, not a count of dozens.
+      if (word.includes("dozen")) {
+        if (!size) size = { quantity: WORD_NUMBERS[word], unit: "item" };
+      } else count = WORD_NUMBERS[word];
       text = text.slice(word.length).trim();
     } else {
       const cw = text.match(COUNT_WORD_PREFIX);
@@ -462,6 +605,14 @@ export function parseLine(input: string): ParsedLine | null {
   if (!/[a-z]/i.test(text)) return null;
 
   return { rawText, name: text, count, size, price };
+}
+
+function normaliseName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function looksLikeOrderEmail(text: string): boolean {
@@ -503,11 +654,49 @@ export function parseLocalList(text: string): LocalParseResult {
   const lines: ParsedLine[] = [];
   let skipped = 0;
   let last: ParsedLine | undefined;
+  /** Inside an "Unavailable items:" section: product lines there were not delivered. */
+  let inUnavailable = false;
+
+  /** Drop the already-read line that names this unavailable product (most recent first). */
+  const dropNamed = (named: string): boolean => {
+    const target = parseLine(named);
+    if (!target) return false;
+    const key = normaliseName(target.name);
+    if (!key) return false;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const n = normaliseName(lines[i].name);
+      if (n === key || n.includes(key) || key.includes(n)) {
+        lines.splice(i, 1);
+        last = lines[lines.length - 1];
+        return true;
+      }
+    }
+    return false;
+  };
 
   for (const raw of rawLines) {
     const trimmed = raw.replace(/ /g, " ").trim();
     if (!trimmed) continue;
     const lower = trimmed.toLowerCase();
+
+    if (UNAVAILABLE_HEADING.test(trimmed)) {
+      inUnavailable = true;
+      last = undefined;
+      skipped++;
+      continue;
+    }
+    if (inUnavailable) {
+      if (SECTION_HEADING.test(trimmed)) {
+        inUnavailable = false;
+        skipped++;
+        continue;
+      } else {
+        // A product listed as unavailable: if it was also listed above, take it back off.
+        if (!QTY_ONLY.test(trimmed) && !PRICE_ONLY.test(trimmed)) dropNamed(trimmed);
+        skipped++;
+        continue;
+      }
+    }
 
     // Detail lines that belong to the product above.
     const q = trimmed.match(QTY_ONLY);
@@ -518,19 +707,30 @@ export function parseLocalList(text: string): LocalParseResult {
     if (PRICE_ONLY.test(trimmed)) {
       if (last && last.price === undefined) {
         const prices = [...trimmed.matchAll(/\$\s?(\d+(?:\.\d{1,2})?)/g)].map((m) => Number(m[1]));
-        const countMatch = trimmed.match(/^(\d+)\s*(?:x|@)/i);
+        const countMatch = trimmed.match(/^(\d+)\s*(?:x|×|@|for)/i);
         if (countMatch && last.count === undefined) last.count = Number(countMatch[1]);
         // The last figure on a "2 x $3.00 $6.00" line is the line total.
         last.price = prices[prices.length - 1];
       }
       continue;
     }
-    if (UNAVAILABLE.test(trimmed)) {
-      if (last) {
-        lines.pop();
-        last = lines[lines.length - 1];
+    const un = trimmed.match(UNAVAILABLE);
+    if (un) {
+      const named = un[1]?.trim();
+      if (named) {
+        // "Item unavailable: Raspberries 125g" names its product: drop only that one, if it was listed.
+        dropNamed(named);
+      } else if (last) {
+        // A bare "Unavailable" under a product line refers to the product just above.
+        lines.splice(lines.lastIndexOf(last), 1);
+        last = undefined;
       }
       skipped++;
+      continue;
+    }
+    if (UNAVAILABLE_SUFFIX.test(trimmed)) {
+      skipped++;
+      last = undefined;
       continue;
     }
     const sub = trimmed.match(/^(?:substituted|replaced)\s+(?:with|by|for)\s*:?\s*(.+)$/i);
@@ -627,9 +827,13 @@ export function offProductToResponse(code: string, p: OffProduct): BarcodeRespon
   const brand = p.brands?.split(",")[0]?.trim() || undefined;
   const size = p.quantity ? parseLine(`item ${p.quantity}`)?.size : undefined;
 
+  const trusted = (t: string) => {
+    const m = matchFoodType(t);
+    return !!m && m.confidence !== "low";
+  };
   let matchText = name;
-  if (!matchFoodType(name)) {
-    const cat = categoryWords(p.categories_tags).find((c) => matchFoodType(c));
+  if (!trusted(name)) {
+    const cat = categoryWords(p.categories_tags).find(trusted);
     if (cat) matchText = cat;
   }
   const draft = lineToDraft({

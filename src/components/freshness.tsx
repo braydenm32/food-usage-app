@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AlertTriangle, Clock, Leaf, Skull } from "lucide-react";
+import { AlertTriangle, CircleAlert, Clock, Leaf } from "lucide-react";
 import type { ItemStatus } from "@/lib/types";
 
 export const STATUS_META: Record<
@@ -9,7 +9,7 @@ export const STATUS_META: Record<
   fresh: { label: "Fresh", text: "text-fresh", soft: "bg-fresh-soft", solid: "bg-fresh", Icon: Leaf },
   "use-soon": { label: "Use soon", text: "text-soon", soft: "bg-soon-soft", solid: "bg-soon", Icon: Clock },
   "use-today": { label: "Use today", text: "text-today", soft: "bg-today-soft", solid: "bg-today", Icon: AlertTriangle },
-  expired: { label: "Check it", text: "text-spoiled", soft: "bg-spoiled-soft", solid: "bg-spoiled", Icon: Skull },
+  expired: { label: "Check it", text: "text-spoiled", soft: "bg-spoiled-soft", solid: "bg-spoiled", Icon: CircleAlert },
 };
 
 /** Small pill: icon + words, so colour is never the only signal. */

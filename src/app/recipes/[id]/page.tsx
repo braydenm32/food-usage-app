@@ -2,8 +2,8 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, Clock, ExternalLink, ShoppingBasket, Users, ChefHat } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, ExternalLink, ShoppingBasket, Users, ChefHat } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, SectionTitle, Sheet, Stepper, buttonClass, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
 import { toast } from "@/components/toast";
@@ -11,7 +11,8 @@ import { CookSheet } from "@/components/recipes/cook-sheet";
 import { getBuiltinRecipe } from "@/lib/recipes/builtin";
 import { readCachedRecipe, cacheRecipes } from "@/lib/recipes/cache";
 import { formatAmount, scaleIngredient } from "@/lib/recipes/quantity";
-import { analyseRecipe, isStaple } from "@/lib/recipes/suggest";
+import { allergenHits, analyseRecipe, dislikeHits, exclusionReason, isStaple } from "@/lib/recipes/suggest";
+import { getFoodType } from "@/lib/shelf-life/foods";
 import { toLocalISODate } from "@/lib/shelf-life/engine";
 import { useItemViews } from "@/lib/selectors";
 import { useLarder } from "@/lib/store";
@@ -91,13 +92,22 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const addToList = useLarder((s) => s.addToList);
   const planMeal = useLarder((s) => s.planMeal);
   const plannerOn = useLarder((s) => s.settings.mealPlannerEnabled);
-  const defaultPeople = useLarder((s) => s.profile.people);
+  const profile = useLarder((s) => s.profile);
+  const defaultPeople = profile.people;
+  const router = useRouter();
+  const planParam = useSearchParams().get("plan");
 
   const isSaved = savedRecipes.some((r) => r.id === recipe.id);
-  const [servings, setServings] = useState(recipe.servings);
+  // Scale to the household by default; the recipe's own serving count is shown beside it.
+  const [servings, setServings] = useState(() => Math.max(1, defaultPeople));
   const [cookOpen, setCookOpen] = useState(false);
+  const planPrefill = planParam && /^\d{4}-\d{2}-\d{2}$/.test(planParam) ? planParam : null;
   const [planOpen, setPlanOpen] = useState(false);
-  const [planDate, setPlanDate] = useState(() => toLocalISODate(new Date()));
+  const [planDate, setPlanDate] = useState(() => planPrefill ?? toLocalISODate(new Date()));
+
+  const hits = useMemo(() => allergenHits(recipe, profile), [recipe, profile]);
+  const dislikes = useMemo(() => dislikeHits(recipe, profile), [recipe, profile]);
+  const dietNote = useMemo(() => (hits.length === 0 && dislikes.length === 0 ? exclusionReason(recipe, profile) : null), [recipe, profile, hits.length, dislikes.length]);
 
   const factor = servings / recipe.servings;
   const analysis = useMemo(() => analyseRecipe(recipe, views), [recipe, views]);
@@ -107,7 +117,8 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   function addMissing() {
     const entries = analysis.missing.map((m) => {
       const s = scaleIngredient(m, factor);
-      return { name: m.name, foodTypeId: m.foodTypeId ?? null, quantity: s.quantity, unit: s.unit, reason: "recipe" as const, recipeId: recipe.id };
+      const name = getFoodType(m.foodTypeId)?.name ?? capitalise(m.name);
+      return { name, foodTypeId: m.foodTypeId ?? null, quantity: s.quantity, unit: s.unit, reason: "recipe" as const, recipeId: recipe.id };
     });
     addToList(entries);
     toast(`Added ${entries.length} ${entries.length === 1 ? "item" : "items"} to your list`);
@@ -124,6 +135,28 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           // eslint-disable-next-line @next/next/no-img-element
           <img src={recipe.image} alt="" className="mb-5 aspect-[16/9] w-full rounded-3xl bg-surface-2 object-cover lg:max-h-72" />
         )}
+        {hits.length > 0 && (
+          <div role="alert" className="mb-4 flex items-start gap-3 rounded-2xl border border-spoiled bg-spoiled-soft p-4 text-ink">
+            <CircleAlert size={22} className="mt-0.5 shrink-0 text-spoiled" aria-hidden />
+            <div>
+              <p className="font-semibold">Contains an allergen in your household</p>
+              <ul className="mt-1 text-[15px]">
+                {hits.map((h) => (
+                  <li key={h.allergy}>
+                    {capitalise(h.allergy)}: <span className="font-medium">{h.ingredient.toLowerCase()}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-sm text-ink-2">Check the labels and swap this out before cooking, or pick another recipe.</p>
+            </div>
+          </div>
+        )}
+        {hits.length === 0 && (dislikes.length > 0 || dietNote) && (
+          <p className="mb-4 flex items-start gap-2 rounded-2xl bg-soon-soft p-3 text-sm text-ink">
+            <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
+            {dislikes.length > 0 ? `Has ${dislikes.join(", ")}, which your household dislikes.` : `${dietNote}. This doesn't fit your household's diet.`}
+          </p>
+        )}
         <h1 className="font-display text-4xl leading-[1.1] text-ink lg:text-5xl">{recipe.title}</h1>
         {recipe.summary && <p className="mt-3 max-w-2xl text-lg text-ink-2">{recipe.summary}</p>}
         <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3 text-[15px] text-ink-2">
@@ -132,12 +165,13 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
               <Clock size={16} aria-hidden /> {recipe.minutes} min
             </span>
           )}
-          <div className="inline-flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <Users size={16} aria-hidden /> Serves
             <Stepper label="servings" value={servings} min={1} onChange={(v) => setServings(Math.max(1, Math.round(v)))} />
-            {servings !== defaultPeople && (
-              <button type="button" className="text-sm font-medium text-primary hover:underline" onClick={() => setServings(defaultPeople)}>
-                Set to {defaultPeople}
+            <span className="whitespace-nowrap text-sm text-ink-3">Recipe serves {recipe.servings}</span>
+            {servings !== recipe.servings && (
+              <button type="button" className="inline-flex h-11 items-center whitespace-nowrap text-sm font-medium text-primary hover:underline" onClick={() => setServings(recipe.servings)}>
+                Use {recipe.servings}
               </button>
             )}
           </div>
@@ -262,7 +296,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
             onClick={() => {
               planMeal(planDate, { ...recipe, servings });
               setPlanOpen(false);
-              toast("Added to your meal plan");
+              toast(`Planned ${recipe.title}`, { action: { label: "View plan", onClick: () => router.push("/plan") } });
             }}
           >
             Add to plan
@@ -275,4 +309,9 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
       </Sheet>
     </article>
   );
+}
+
+function capitalise(text: string): string {
+  const t = text.trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }

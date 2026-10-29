@@ -77,7 +77,7 @@ export default function InsightsPage() {
 
   return (
     <>
-      <PageHeader title="Insights" subtitle="What got eaten, and what got binned" actions={back} />
+      <PageHeader title="Insights" subtitle="What got eaten, and what got binned" actions={back} showSettings />
       <div className="px-5 lg:px-0">
         {empty ? (
           <Card>

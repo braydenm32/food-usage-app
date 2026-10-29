@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FoodType } from "./types";
+import type { FoodType, ItemEvent, PantryItem } from "./types";
 
 // A small fixed food table so these tests don't move when the real data changes.
 vi.mock("./shelf-life/foods-data", () => {
@@ -12,7 +12,9 @@ vi.mock("./shelf-life/foods-data", () => {
   };
   const FOOD_TYPES: FoodType[] = [
     { ...base, id: "milk", name: "Milk", aliases: ["full cream milk", "lite milk"], category: "dairy", aisle: "Dairy, Eggs & Fridge", emoji: "🥛", dateKind: "use-by", defaultLocation: "fridge", defaultUnit: "L", defaultQuantity: 2 },
-    { ...base, id: "eggs", name: "Eggs", aliases: ["egg", "free range eggs"], category: "eggs", aisle: "Dairy, Eggs & Fridge", emoji: "🥚", dateKind: "best-before", defaultLocation: "fridge", defaultUnit: "item", defaultQuantity: 12 },
+    { ...base, id: "eggs", name: "Eggs", aliases: ["egg", "free range eggs"], category: "eggs", aisle: "Dairy, Eggs & Fridge", emoji: "🥚", dateKind: "best-before", defaultLocation: "fridge", defaultUnit: "dozen", defaultQuantity: 1 },
+    { ...base, id: "tomato", name: "Tomato", aliases: ["tomatoes", "truss tomatoes"], category: "vegetables", aisle: "Fruit & Veg", emoji: "🍅", dateKind: "best-before", defaultLocation: "pantry", defaultUnit: "item", defaultQuantity: 4 },
+    { ...base, id: "ginger", name: "Fresh ginger", aliases: ["ginger", "ginger root"], category: "vegetables", aisle: "Fruit & Veg", emoji: "🫚", dateKind: "best-before", defaultLocation: "fridge", defaultUnit: "item", defaultQuantity: 1 },
     { ...base, id: "beef-mince", name: "Beef mince", aliases: ["mince", "beef mince"], category: "meat", aisle: "Meat & Seafood", emoji: "🥩", dateKind: "use-by", defaultLocation: "fridge", defaultUnit: "g", defaultQuantity: 500 },
     { ...base, id: "banana", name: "Bananas", aliases: ["banana", "cavendish"], category: "fruit", aisle: "Fruit & Veg", emoji: "🍌", dateKind: "best-before", defaultLocation: "pantry", defaultUnit: "item", defaultQuantity: 6 },
     { ...base, id: "tinned-tomatoes", name: "Tinned tomatoes", aliases: ["diced tomatoes", "crushed tomatoes"], category: "pantry", aisle: "Pantry", emoji: "🥫", dateKind: "best-before", defaultLocation: "pantry", defaultUnit: "tin", defaultQuantity: 1 },
@@ -21,8 +23,20 @@ vi.mock("./shelf-life/foods-data", () => {
   return { FOOD_TYPES };
 });
 
-const { parseLine, parseLocalList, lineToDraft, resolveQuantity, looksLikeOrderEmail, isLikelyNonFood, freeTextDraft, applyFoodType, offProductToResponse } =
-  await import("./drafts");
+const {
+  parseLine,
+  parseLocalList,
+  lineToDraft,
+  resolveQuantity,
+  looksLikeOrderEmail,
+  isLikelyNonFood,
+  freeTextDraft,
+  applyFoodType,
+  offProductToResponse,
+  withLastAdded,
+  findMergeTarget,
+} = await import("./drafts");
+const { defaultsForUnknown } = await import("./shelf-life/engine");
 
 describe("parseLine", () => {
   it("strips bullets and numbering", () => {
@@ -124,7 +138,7 @@ describe("freeTextDraft and applyFoodType", () => {
   });
   it("re-points a draft at another food", () => {
     const d = applyFoodType(freeTextDraft("mystery thing"), "eggs");
-    expect(d).toMatchObject({ foodTypeId: "eggs", emoji: "🥚", unit: "item", confidence: "high" });
+    expect(d).toMatchObject({ foodTypeId: "eggs", emoji: "🥚", unit: "dozen", confidence: "high" });
   });
 });
 
@@ -229,5 +243,131 @@ describe("offProductToResponse", () => {
   it("keeps the product name when nothing matches", () => {
     const r = offProductToResponse("123456789", { product_name: "ZINGY QUINOA PUFFS", quantity: "150 g" });
     expect(r.draft).toMatchObject({ foodTypeId: null, name: "Zingy quinoa puffs", quantity: 150, unit: "g" });
+  });
+});
+
+describe("parser fixes from review", () => {
+  it("reads a multi-buy price line as the line total for the whole count", () => {
+    const r = parseLocalList("Beef mince 1kg\n2 x $13.00 / $26.00");
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toMatchObject({ count: 2, price: 26, size: { quantity: 1, unit: "kg" } });
+    expect(lineToDraft(r.lines[0])).toMatchObject({ foodTypeId: "beef-mince", quantity: 2000, unit: "g", price: 26 });
+  });
+
+  it("reads a multi-buy on the same line", () => {
+    expect(parseLine("Beef mince 1kg 2 x $13.00 / $26.00")).toMatchObject({
+      name: "Beef mince",
+      count: 2,
+      price: 26,
+      size: { quantity: 1, unit: "kg" },
+    });
+    expect(parseLocalList("Beef mince 1kg\n2 for $26.00").lines[0]).toMatchObject({ count: 2, price: 26 });
+  });
+
+  it("reads '12pk eggs' as one dozen", () => {
+    expect(lineToDraft(parseLine("12pk eggs")!)).toMatchObject({ foodTypeId: "eggs", quantity: 1, unit: "dozen" });
+    expect(lineToDraft(parseLine("free range eggs 12 pack")!)).toMatchObject({ quantity: 1, unit: "dozen" });
+    expect(lineToDraft(parseLine("2 x eggs 6pk")!)).toMatchObject({ quantity: 1, unit: "dozen" });
+    expect(lineToDraft(parseLine("half a dozen eggs")!)).toMatchObject({ quantity: 0.5, unit: "dozen" });
+    // "2 packs" is a count of packs, not a pack of two.
+    expect(parseLine("2 packs tortillas")).toMatchObject({ size: { quantity: 2, unit: "pack" } });
+  });
+
+  it("keeps the weight for loose produce: 'tomatoes 1kg' is 1 kg", () => {
+    expect(lineToDraft(parseLine("tomatoes 1kg")!)).toMatchObject({ foodTypeId: "tomato", quantity: 1, unit: "kg" });
+    expect(lineToDraft(parseLine("1kg truss tomatoes")!)).toMatchObject({ quantity: 1, unit: "kg" });
+    // Counted when counted.
+    expect(lineToDraft(parseLine("4 tomatoes")!)).toMatchObject({ quantity: 4, unit: "item" });
+    // Packaged counted foods still count packs, not grams.
+    expect(lineToDraft(parseLine("diced tomatoes 400g")!)).toMatchObject({ foodTypeId: "tinned-tomatoes", quantity: 1, unit: "tin" });
+  });
+
+  it("drops only the item named in 'Item unavailable: X'", () => {
+    const r = parseLocalList(
+      "Woolworths order\nOrder number: 123\nFull cream milk 2L\nQty: 1\n$3.10\nItem unavailable: Raspberries 125g\nEggs 12pk\nQty: 1\n$6.90\nSubtotal $10",
+    );
+    expect(r.lines.map((l) => l.name)).toEqual(["Full cream milk", "Eggs"]);
+  });
+
+  it("drops a named unavailable item that was listed earlier, and nothing else", () => {
+    const r = parseLocalList("Milk 2L\nRaspberries 125g\nBananas\nItem unavailable: Raspberries 125g\nEggs");
+    expect(r.lines.map((l) => l.name)).toEqual(["Milk", "Bananas", "Eggs"]);
+  });
+
+  it("skips an 'Unavailable items' section and keeps going after the next heading", () => {
+    const r = parseLocalList(
+      "Your order from Coles\nOrder number: 9\nMilk 2L\nUnavailable items:\nRaspberries 125g\nBeef mince 500g\nDelivered items\nBananas\nSubtotal $9",
+    );
+    expect(r.lines.map((l) => l.name)).toEqual(["Milk", "Bananas"]);
+  });
+
+  it("skips a line marked unavailable at the end", () => {
+    expect(parseLocalList("Milk 2L\nRaspberries 125g - unavailable\nEggs").lines.map((l) => l.name)).toEqual(["Milk", "Eggs"]);
+  });
+
+  it("keeps the shopper's own name for a low-confidence match and suggests the food", () => {
+    const d = lineToDraft({ name: "gnger root" });
+    expect(d).toMatchObject({ name: "Gnger root", foodTypeId: null, confidence: "low" });
+    expect(d.suggestion).toMatchObject({ foodTypeId: "ginger", name: "Fresh ginger" });
+    // Accepting the suggestion clears it.
+    expect(applyFoodType(d, d.suggestion!.foodTypeId)).toMatchObject({ foodTypeId: "ginger", suggestion: undefined });
+    // A weak overlap on a generic word is not worth suggesting.
+    expect(lineToDraft({ name: "ginger piece" }).foodTypeId).toBe("ginger");
+    expect(lineToDraft({ name: "goat curry root" }).suggestion).toBeUndefined();
+  });
+
+  it("puts unknown raw meat in the fridge with a short use-by", () => {
+    const d = lineToDraft(parseLine("venison sausages 500g")!);
+    expect(d).toMatchObject({ foodTypeId: null, locationId: "fridge", dateKind: "use-by", quantity: 500, unit: "g" });
+    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 2 });
+    // Other unknown foods also go to the fridge, but with a gentler estimate.
+    expect(lineToDraft({ name: "Dragon fruit jam" })).toMatchObject({ locationId: "fridge", dateKind: "best-before" });
+  });
+});
+
+describe("smart defaults and duplicates", () => {
+  const added = (over: Partial<ItemEvent>): ItemEvent => ({
+    id: Math.random().toString(36),
+    itemId: "i",
+    itemName: "Milk",
+    foodTypeId: "milk",
+    type: "added",
+    at: new Date().toISOString(),
+    ...over,
+  });
+
+  it("uses the last spot and amount for that food", () => {
+    const events = [added({ locationId: "fridge", quantity: 2, unit: "L" }), added({ locationId: "door", quantity: 1, unit: "L" })];
+    const d = withLastAdded(lineToDraft({ name: "milk" }), events, ["fridge", "door", "pantry", "freezer"]);
+    expect(d).toMatchObject({ locationId: "door", quantity: 1, unit: "L" });
+  });
+
+  it("ignores spots that no longer exist", () => {
+    const d = withLastAdded(lineToDraft({ name: "milk" }), [added({ locationId: "garage", quantity: 3, unit: "L" })], ["fridge"]);
+    expect(d).toMatchObject({ locationId: "fridge", quantity: 3 });
+  });
+
+  it("finds an unopened item of the same food in the same spot", () => {
+    const item = (over: Partial<PantryItem>): PantryItem => ({
+      id: "a",
+      name: "Milk",
+      foodTypeId: "milk",
+      emoji: "🥛",
+      locationId: "fridge",
+      quantity: 1,
+      initialQuantity: 1,
+      unit: "L",
+      addedAt: new Date().toISOString(),
+      dateKind: "use-by",
+      source: "manual",
+      ...over,
+    });
+    const draft = { foodTypeId: "milk", locationId: "fridge", unit: "L" as const, printedDate: undefined };
+    expect(findMergeTarget(draft, [item({})])?.id).toBe("a");
+    expect(findMergeTarget(draft, [item({ openedAt: new Date().toISOString() })])).toBeUndefined();
+    expect(findMergeTarget(draft, [item({ locationId: "pantry" })])).toBeUndefined();
+    expect(findMergeTarget(draft, [item({ printedDate: "2026-11-02" })])).toBeUndefined();
+    expect(findMergeTarget({ ...draft, unit: "ml" }, [item({})])?.id).toBe("a");
+    expect(findMergeTarget({ ...draft, unit: "item" }, [item({})])).toBeUndefined();
   });
 });

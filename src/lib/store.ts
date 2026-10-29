@@ -171,7 +171,15 @@ export interface LarderState {
    * Add drafts (only those with include). `removeListIds` takes shopping-list rows off the
    * list in the same undoable step (used by "Put in the larder").
    */
-  addItems: (drafts: DraftItem[], source: PantryItem["source"], opts?: { removeListIds?: string[] }) => PantryItem[];
+  addItems: (
+    drafts: DraftItem[],
+    source: PantryItem["source"],
+    opts?: {
+      removeListIds?: string[];
+      /** Top up existing items instead of adding new ones (same undo step). Quantity is in the item's unit. */
+      merge?: { itemId: string; quantity: number; price?: number }[];
+    },
+  ) => PantryItem[];
   updateItem: (id: string, patch: Partial<PantryItem>) => void;
   openItem: (id: string) => void;
   moveItem: (id: string, locationId: string) => void;
@@ -180,7 +188,8 @@ export interface LarderState {
   /** Use or bin several whole items as one undoable step. */
   consumeMany: (ids: string[], how: "used" | "binned") => void;
   deleteItem: (id: string) => void;
-  cookRecipe: (recipe: Recipe, deductions: CookDeduction[]) => void;
+  /** `leftovers` adds a new item in the same undo step (the cook sheet's "Save leftovers"). */
+  cookRecipe: (recipe: Recipe, deductions: CookDeduction[], leftovers?: DraftItem) => void;
   /** Revert the last undoable action. With an id, only if it is still that action. */
   performUndo: (id?: string) => void;
   /** Forget the undo snapshot. With an id, only if it is still that action. */
@@ -386,21 +395,42 @@ export const useLarder = create<LarderState>()(
               };
             });
           const removeIds = new Set(opts?.removeListIds ?? []);
-          act(`Added ${created.length} item${created.length === 1 ? "" : "s"}`, (s) => ({
-            items: [...s.items, ...created],
-            events: [
-              ...s.events,
-              ...created.map((i) =>
-                makeEvent(i, "added", { detail: source, locationId: i.locationId, quantity: i.quantity, unit: i.unit }),
+          const merges = new Map((opts?.merge ?? []).filter((m) => m.quantity > 0).map((m) => [m.itemId, m]));
+          const total = created.length + merges.size;
+          act(`Added ${total} item${total === 1 ? "" : "s"}`, (s) => {
+            const topped: PantryItem[] = [];
+            const items = s.items.map((i) => {
+              const m = merges.get(i.id);
+              if (!m) return i;
+              const q = Math.round((i.quantity + m.quantity) * 1000) / 1000;
+              const next: PantryItem = {
+                ...i,
+                quantity: q,
+                initialQuantity: Math.round((Math.max(i.initialQuantity, i.quantity) + m.quantity) * 1000) / 1000,
+                price: i.price !== undefined && m.price !== undefined ? Math.round((i.price + m.price) * 100) / 100 : i.price,
+              };
+              topped.push(next);
+              return next;
+            });
+            return {
+              items: [...items, ...created],
+              events: [
+                ...s.events,
+                ...created.map((i) =>
+                  makeEvent(i, "added", { detail: source, locationId: i.locationId, quantity: i.quantity, unit: i.unit }),
+                ),
+                ...topped.map((i) =>
+                  makeEvent(i, "added", { detail: source, locationId: i.locationId, quantity: merges.get(i.id)!.quantity, unit: i.unit }),
+                ),
+              ],
+              // Ticking things off the list by adding them to the pantry.
+              shoppingList: s.shoppingList.filter(
+                (l) =>
+                  !removeIds.has(l.id) &&
+                  !(l.checked && [...created, ...topped].some((c) => c.foodTypeId && c.foodTypeId === l.foodTypeId)),
               ),
-            ],
-            // Ticking things off the list by adding them to the pantry.
-            shoppingList: s.shoppingList.filter(
-              (l) =>
-                !removeIds.has(l.id) &&
-                !(l.checked && created.some((c) => c.foodTypeId && c.foodTypeId === l.foodTypeId)),
-            ),
-          }));
+            };
+          });
           return created;
         },
 
@@ -470,7 +500,7 @@ export const useLarder = create<LarderState>()(
           act(`Removed ${item.name}`, (s) => ({ items: s.items.filter((i) => i.id !== id) }));
         },
 
-        cookRecipe: (recipe, deductions) => {
+        cookRecipe: (recipe, deductions, leftovers) => {
           const items = [...get().items];
           const events: ItemEvent[] = [];
           for (const d of deductions) {
@@ -489,6 +519,26 @@ export const useLarder = create<LarderState>()(
                 quantity: remaining,
                 openedAt: item.openedAt ?? (opensWhenUsed(item) ? nowISO() : undefined),
               };
+          }
+          let added: PantryItem | undefined;
+          if (leftovers) {
+            added = {
+              id: uid(),
+              name: leftovers.name,
+              foodTypeId: leftovers.foodTypeId,
+              emoji: leftovers.emoji,
+              locationId: leftovers.locationId,
+              quantity: leftovers.quantity,
+              initialQuantity: leftovers.quantity,
+              unit: leftovers.unit,
+              addedAt: nowISO(),
+              dateKind: leftovers.dateKind,
+              source: "manual",
+            };
+            items.push(added);
+            events.push(
+              makeEvent(added, "added", { detail: "leftovers", locationId: added.locationId, quantity: added.quantity, unit: added.unit }),
+            );
           }
           act(`Cooked ${recipe.title}`, (s) => ({ items, events: [...s.events, ...events] }));
         },

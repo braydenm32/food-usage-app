@@ -128,7 +128,7 @@ export default function PlanPage() {
   if (!enabled) {
     return (
       <div>
-        <PageHeader title="Meal plan" />
+        <PageHeader title="Meal plan" showSettings />
         <div className="px-5 lg:px-0">
           <EmptyState
             emoji="📅"
@@ -152,38 +152,38 @@ export default function PlanPage() {
   }
 
   const plannedCount = weekEntries.length;
+  const weekName =
+    weekOffset === 0 ? "This week" : weekOffset === 1 ? "Next week" : weekOffset === -1 ? "Last week" : "Week of";
+  const weekButton = "h-11 w-11 border border-line bg-surface shadow-card hover:border-primary";
 
   return (
     <div className="lg:pb-8">
-      <PageHeader
-        title="Meal plan"
-        subtitle={
-          weekOffset === 0 ? "This week" : weekOffset === 1 ? "Next week" : weekOffset === -1 ? "Last week" : weekLabel(monday)
-        }
-        actions={
-          <>
-            <IconButton label="Previous week" onClick={() => setWeekOffset((w) => w - 1)}>
-              <ChevronLeft size={22} />
-            </IconButton>
-            <IconButton label="Next week" onClick={() => setWeekOffset((w) => w + 1)}>
-              <ChevronRight size={22} />
-            </IconButton>
-          </>
-        }
-      />
+      <PageHeader title="Meal plan" subtitle="Dinners for the week, and a list for what's missing." showSettings />
 
       <div className="px-5 lg:px-0">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <p className="text-sm text-ink-2">
-            <CalendarDays size={14} aria-hidden className="mr-1.5 inline-block align-[-2px]" />
-            {weekLabel(monday)}
-          </p>
-          {weekOffset !== 0 && (
+        {/* Week switcher: visible circles either side of the week name. */}
+        <div className="mb-4 flex items-center gap-3">
+          <IconButton label="Previous week" onClick={() => setWeekOffset((w) => w - 1)} className={weekButton}>
+            <ChevronLeft size={22} />
+          </IconButton>
+          <div className="min-w-0 flex-1 text-center" aria-live="polite">
+            <p className="font-display text-xl leading-tight text-ink">{weekName}</p>
+            <p className="text-sm tabular-nums text-ink-2">
+              <CalendarDays size={14} aria-hidden className="mr-1.5 inline-block align-[-2px]" />
+              {weekLabel(monday)}
+            </p>
+          </div>
+          <IconButton label="Next week" onClick={() => setWeekOffset((w) => w + 1)} className={weekButton}>
+            <ChevronRight size={22} />
+          </IconButton>
+        </div>
+        {weekOffset !== 0 && (
+          <div className="mb-4 text-center">
             <Button variant="ghost" size="sm" onClick={() => setWeekOffset(0)}>
               Back to this week
             </Button>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="mb-5 rounded-[var(--radius-card)] bg-surface-2 p-4">
           {plannedCount === 0 ? (
@@ -226,20 +226,48 @@ export default function PlanPage() {
             const isToday = d.getTime() === today.getTime();
             const isPast = d < today;
             const entries = weekEntries.filter((m) => m.date === iso);
+            const addHref = `/recipes?plan=${iso}`;
+            const heading = (
+              <h2
+                className={cx(
+                  "flex items-center gap-2 font-display text-lg",
+                  isToday ? "text-primary" : isPast ? "text-ink-3" : "text-ink",
+                )}
+              >
+                {DAY_NAMES[i]}
+                {isToday && (
+                  <span className="rounded-full bg-primary px-2 py-0.5 font-sans text-[11px] font-semibold leading-4 text-primary-ink">
+                    Today
+                  </span>
+                )}
+              </h2>
+            );
+            if (entries.length === 0) {
+              // Nothing planned: one compact row, so a quiet week doesn't become seven tall cards.
+              return (
+                <li key={iso}>
+                  <Card className={cx("flex items-center gap-3 py-1 pl-4 pr-1", isToday && "border-primary ring-1 ring-primary")}>
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      {heading}
+                      <span className="text-sm tabular-nums text-ink-3">{shortDate(d)}</span>
+                    </div>
+                    <Link
+                      href={addHref}
+                      className="flex h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-primary hover:bg-surface-2"
+                    >
+                      <Plus size={16} aria-hidden />
+                      Add a meal
+                      <span className="sr-only"> for {DAY_NAMES[i]}</span>
+                    </Link>
+                  </Card>
+                </li>
+              );
+            }
             return (
               <li key={iso}>
-                <Card
-                  className={cx(
-                    "overflow-hidden",
-                    isToday && "border-primary ring-1 ring-primary",
-                    isPast && !isToday && "opacity-70",
-                  )}
-                >
-                  <div className="flex items-baseline justify-between gap-3 px-4 pt-3">
-                    <h2 className={cx("font-display text-lg", isToday ? "text-primary" : "text-ink")}>
-                      {DAY_NAMES[i]}
-                      {isToday && <span className="ml-2 font-sans text-xs font-semibold text-primary">Today</span>}
-                    </h2>
+                <Card className={cx("overflow-hidden", isToday && "border-primary ring-1 ring-primary")}>
+                  <div className="flex items-center justify-between gap-3 px-4 pt-3">
+                    {heading}
                     <span className="text-sm tabular-nums text-ink-3">{shortDate(d)}</span>
                   </div>
                   <div className="px-2 pb-2 pt-1">
@@ -275,11 +303,12 @@ export default function PlanPage() {
                       );
                     })}
                     <Link
-                      href={`/recipes?plan=${iso}`}
+                      href={addHref}
                       className="flex h-11 items-center gap-2 rounded-xl px-2 text-sm font-medium text-primary hover:bg-surface-2"
                     >
                       <Plus size={16} aria-hidden />
-                      {entries.length ? "Add another meal" : "Add a meal"}
+                      Add another meal
+                      <span className="sr-only"> for {DAY_NAMES[i]}</span>
                     </Link>
                   </div>
                 </Card>

@@ -1,13 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Button, Sheet, Stepper, cx } from "@/components/ui";
+import { Button, Sheet, Stepper, Switch, cx } from "@/components/ui";
 import { StatusPill } from "@/components/freshness";
 import { toast } from "@/components/toast";
 import { useLarder } from "@/lib/store";
 import { defaultDeduction, formatAmount, stepFor } from "@/lib/recipes/quantity";
+import { formatQuantity } from "@/components/pantry/format";
+import { getFoodType } from "@/lib/shelf-life/foods";
+import { storageDays } from "@/lib/shelf-life/engine";
 import type { RecipeUse } from "@/lib/recipes/suggest";
-import type { PantryItem, Recipe } from "@/lib/types";
+import type { DraftItem, PantryItem, Recipe } from "@/lib/types";
 
 interface Props {
   open: boolean;
@@ -52,13 +55,39 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
 
   const changed = rows.filter((r) => (amounts[r.item.id] ?? 0) > 0);
 
+  const [saveLeftovers, setSaveLeftovers] = useState(false);
+  const leftoverFood = getFoodType("leftovers-meal");
+  const leftoverDays = leftoverFood ? storageDays(leftoverFood, undefined, "fridge") : 3;
+
   function confirm() {
-    if (changed.length > 0) {
+    const parts = changed.map((r) => {
+      const left = Math.round((r.item.quantity - (amounts[r.item.id] ?? 0)) * 1000) / 1000;
+      return left <= 0 ? `${r.item.name} used up` : `${r.item.name}: ${formatQuantity(left, r.item.unit)} left`;
+    });
+    const summary = parts.length > 2 ? `${parts.slice(0, 2).join(", ")} and ${parts.length - 2} more updated` : parts.join(", ");
+
+    let leftovers: DraftItem | undefined;
+    if (saveLeftovers) {
+      leftovers = {
+        key: "leftovers",
+        name: `Leftovers – ${recipe.title}`,
+        foodTypeId: leftoverFood?.id ?? "leftovers-meal",
+        emoji: leftoverFood?.emoji ?? "🍲",
+        locationId: "fridge",
+        quantity: 1,
+        unit: "item",
+        dateKind: leftoverFood?.dateKind ?? "use-by",
+        include: true,
+      };
+    }
+    if (changed.length > 0 || leftovers) {
       cookRecipe(
         recipe,
         changed.map((r) => ({ itemId: r.item.id, quantity: amounts[r.item.id] })),
+        leftovers,
       );
-      toast(`Nice one. Updated ${changed.length} ${changed.length === 1 ? "item" : "items"} in your larder`, { undoable: true });
+      const tail = leftovers ? `Leftovers saved in the fridge for ${leftoverDays} days` : "";
+      toast([summary, tail].filter(Boolean).join(". "), { undoable: true });
     } else {
       toast("Enjoy! Nothing in your larder changed.");
     }
@@ -72,7 +101,11 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
       title="What did you use?"
       footer={
         <Button block size="lg" onClick={confirm}>
-          {changed.length > 0 ? `Update ${changed.length} ${changed.length === 1 ? "item" : "items"}` : "Done, change nothing"}
+          {changed.length > 0
+            ? `Update ${changed.length} ${changed.length === 1 ? "item" : "items"}${saveLeftovers ? " and save leftovers" : ""}`
+            : saveLeftovers
+              ? "Save leftovers"
+              : "Done, change nothing"}
         </Button>
       }
     >
@@ -137,6 +170,14 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
           </ul>
         </>
       )}
+      <div className="mt-2 border-t border-line">
+        <Switch
+          checked={saveLeftovers}
+          onChange={setSaveLeftovers}
+          label="Save leftovers"
+          description={`Adds “Leftovers – ${recipe.title}” to the fridge, good for ${leftoverDays} days.`}
+        />
+      </div>
     </Sheet>
   );
 }

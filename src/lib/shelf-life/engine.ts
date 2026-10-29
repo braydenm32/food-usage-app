@@ -14,7 +14,7 @@ export const FREEZER_NOT_RECOMMENDED_DAYS = 30;
 const SPOT_NAME: Record<StorageKind, string> = { pantry: "pantry", fridge: "fridge", freezer: "freezer" };
 
 const HIGH_RISK =
-  /\b(meat|mince|chicken|fish|prawns?|seafood|fillets?|steaks?|sausages?|snags?|pork|lamb|beef|veal|kangaroo|turkey|duck|chops?|cutlets?|mussels?|oysters?|squid|calamari|salmon|tuna steak|crab|lobster|scallops?)\b/i;
+  /\b(meat|mince|chicken|fish|prawns?|seafood|fillets?|steaks?|sausages?|snags?|pork|lamb|beef|veal|kangaroo|turkey|duck|chops?|cutlets?|mussels?|oysters?|squid|calamari|salmon|tuna steak|crab|lobster|scallops?|goat|venison|rabbit|quail|wings?|drumsticks?|thighs?|brisket|rissoles?|meatballs?|offal)\b/i;
 
 /**
  * True when free text looks like raw meat or seafood, which must be kept cold and used fast.

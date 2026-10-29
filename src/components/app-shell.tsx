@@ -35,7 +35,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <Suspense fallback={null}>
         <DesktopNav />
       </Suspense>
-      <main className="pb-tabbar mx-auto w-full max-w-3xl lg:px-10">{children}</main>
+      <main className="pb-tabbar mx-auto w-full max-w-3xl lg:px-10 lg:has-[[data-wide]]:max-w-6xl">{children}</main>
       <OfflinePill />
       <Suspense fallback={null}>
         <MobileNav />

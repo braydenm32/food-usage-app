@@ -24,7 +24,12 @@ async function lookupOpenFoodFacts(code: string): Promise<Lookup> {
 
 export async function GET(_request: Request, ctx: RouteContext<"/api/barcode/[code]">) {
   const { code: rawCode } = await ctx.params;
-  const code = decodeURIComponent(rawCode).replace(/\s+/g, "");
+  let code = "";
+  try {
+    code = decodeURIComponent(rawCode).replace(/\s+/g, "");
+  } catch {
+    // Malformed percent-encoding, e.g. "%E0%A4%A": treat as a bad code.
+  }
   if (!/^\d{6,14}$/.test(code)) {
     return Response.json(
       { error: "bad_code", message: "Barcodes are 6 to 14 digits. Check the number and try again." } satisfies ApiError,
