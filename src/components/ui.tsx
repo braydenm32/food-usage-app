@@ -1,7 +1,8 @@
 "use client";
 
 import clsx from "clsx";
-import { X, Minus, Plus } from "lucide-react";
+import Link from "next/link";
+import { X, Minus, Plus, Settings as SettingsIcon } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -20,15 +21,18 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "lg";
 
 const buttonBase =
-  "inline-flex items-center justify-center gap-2 rounded-full font-semibold transition-colors disabled:opacity-50 disabled:pointer-events-none select-none";
+  "relative inline-flex items-center justify-center gap-2 rounded-full font-semibold transition-colors disabled:pointer-events-none select-none";
+// Disabled buttons stay solid and legible rather than washed out.
 const buttonVariants: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-primary-ink hover:brightness-110 active:brightness-95",
-  secondary: "bg-surface text-ink border border-line hover:bg-surface-2",
-  ghost: "text-ink-2 hover:bg-surface-2 hover:text-ink",
-  danger: "bg-spoiled text-white hover:brightness-110",
+  primary: "bg-primary text-primary-ink hover:brightness-110 active:brightness-95 disabled:bg-surface-2 disabled:text-ink-3",
+  secondary: "bg-surface text-ink border border-line hover:bg-surface-2 disabled:text-ink-3",
+  ghost: "text-ink-2 hover:bg-surface-2 hover:text-ink disabled:text-ink-3",
+  danger: "bg-spoiled text-on-status hover:brightness-110 disabled:bg-surface-2 disabled:text-ink-3",
 };
+/** Invisible hit area so small controls still get a 44px touch target. */
+const HIT_44 = "after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']";
 const buttonSizes: Record<ButtonSize, string> = {
-  sm: "h-9 px-3.5 text-sm",
+  sm: `h-9 px-3.5 text-sm ${HIT_44}`,
   md: "h-11 px-5 text-[15px]",
   lg: "h-14 px-6 text-base",
 };
@@ -82,14 +86,20 @@ export function IconButton({
 
 /* ---------- Page header ---------- */
 
+/**
+ * Page title row. `showSettings` adds a gear link to /settings after `actions`; it is hidden
+ * at lg, where the side rail already links to Settings.
+ */
 export function PageHeader({
   title,
   subtitle,
   actions,
+  showSettings,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
+  showSettings?: boolean;
 }) {
   return (
     <header className="flex items-end justify-between gap-4 px-5 pb-4 pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-0 lg:pt-10">
@@ -97,7 +107,21 @@ export function PageHeader({
         <h1 className="font-display text-[2rem] leading-tight text-ink lg:text-[2.5rem]">{title}</h1>
         {subtitle && <p className="mt-1 text-[15px] text-ink-2">{subtitle}</p>}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
+      {(actions || showSettings) && (
+        <div className="flex shrink-0 items-center gap-1">
+          {actions}
+          {showSettings && (
+            <Link
+              href="/settings"
+              aria-label="Settings"
+              title="Settings"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
+            >
+              <SettingsIcon size={22} aria-hidden />
+            </Link>
+          )}
+        </div>
+      )}
     </header>
   );
 }
@@ -157,7 +181,8 @@ export function Chip({
       type="button"
       aria-pressed={selected}
       className={clsx(
-        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
+        "relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
+        HIT_44,
         selected ? "border-primary bg-primary text-primary-ink" : "border-line bg-surface text-ink-2 hover:text-ink",
         className,
       )}
@@ -191,7 +216,8 @@ export function Segmented<T extends string>({
           aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
           className={clsx(
-            "flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full px-3 text-sm font-medium transition-colors",
+            "relative flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full px-3 text-sm font-medium transition-colors",
+            HIT_44,
             value === o.value ? "bg-surface text-ink shadow-card" : "text-ink-2 hover:text-ink",
           )}
         >
@@ -255,7 +281,7 @@ export function Stepper({
         type="button"
         aria-label={`Decrease ${label}`}
         onClick={() => onChange(Math.max(min, round(value - step)))}
-        className="flex h-10 w-10 items-center justify-center rounded-full text-ink-2 hover:bg-surface-2"
+        className="relative flex h-10 w-10 items-center justify-center rounded-full text-ink-2 hover:bg-surface-2 after:absolute after:-inset-0.5 after:content-['']"
       >
         <Minus size={16} />
       </button>
@@ -267,7 +293,7 @@ export function Stepper({
         type="button"
         aria-label={`Increase ${label}`}
         onClick={() => onChange(round(value + step))}
-        className="flex h-10 w-10 items-center justify-center rounded-full text-ink-2 hover:bg-surface-2"
+        className="relative flex h-10 w-10 items-center justify-center rounded-full text-ink-2 hover:bg-surface-2 after:absolute after:-inset-0.5 after:content-['']"
       >
         <Plus size={16} />
       </button>
@@ -280,11 +306,13 @@ export function Switch({
   onChange,
   label,
   description,
+  disabled,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
   description?: string;
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
@@ -293,22 +321,32 @@ export function Switch({
         <label htmlFor={id} className="text-[15px] font-medium text-ink">
           {label}
         </label>
-        {description && <p className="text-sm text-ink-2">{description}</p>}
+        {description && (
+          <p id={`${id}-desc`} className="text-sm text-ink-2">
+            {description}
+          </p>
+        )}
       </div>
       <button
         id={id}
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-describedby={description ? `${id}-desc` : undefined}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={clsx(
-          "relative h-7 w-12 shrink-0 rounded-full transition-colors",
-          checked ? "bg-primary" : "bg-line",
+          // 48×28 track; the after: element widens the touch target to 44px tall.
+          "relative h-7 w-12 shrink-0 rounded-full transition-colors after:absolute after:-inset-2 after:content-['']",
+          "disabled:cursor-not-allowed disabled:opacity-60",
+          checked ? "bg-primary" : "bg-ink-3",
         )}
       >
         <span
+          aria-hidden
           className={clsx(
-            "absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform",
+            // left-0 pins the knob; without it the absolute box sits at the centred static position.
+            "absolute left-0 top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform",
             checked ? "translate-x-[22px]" : "translate-x-0.5",
           )}
         />
@@ -335,6 +373,7 @@ export function Sheet({
   wide?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     const d = ref.current;
@@ -346,6 +385,7 @@ export function Sheet({
   return (
     <dialog
       ref={ref}
+      aria-labelledby={titleId}
       onClose={onClose}
       onCancel={(e) => {
         e.preventDefault();
@@ -364,7 +404,9 @@ export function Sheet({
       {open && (
         <>
           <div className="flex items-center justify-between gap-3 px-5 pb-2 pt-4">
-            <h2 className="font-display text-2xl leading-tight">{title}</h2>
+            <h2 id={titleId} className="font-display text-2xl leading-tight">
+              {title}
+            </h2>
             <IconButton label="Close" onClick={onClose} className="-mr-2">
               <X size={20} />
             </IconButton>

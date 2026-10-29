@@ -2,6 +2,7 @@
 // Shared by the client (add flow) and the server (API routes), so no React or store imports here.
 // Relative imports keep this file loadable by vitest without path-alias config.
 
+import { defaultsForUnknown } from "./shelf-life/engine";
 import { getFoodType, matchFoodType } from "./shelf-life/foods";
 import type { DraftItem, FoodType, Unit } from "./types";
 
@@ -180,13 +181,11 @@ export function isLikelyNonFood(text: string): boolean {
 
 /* ---------- Line → draft ---------- */
 
-const DEFAULT_UNKNOWN: Pick<DraftItem, "emoji" | "locationId" | "dateKind" | "unit" | "quantity"> = {
-  emoji: "🛒",
-  locationId: "pantry",
-  dateKind: "best-before",
-  unit: "item",
-  quantity: 1,
-};
+/** Defaults for a line that matched no food: fridge, cautious dates (see defaultsForUnknown). */
+function unknownDefaults(name: string): Pick<DraftItem, "emoji" | "locationId" | "dateKind"> {
+  const d = defaultsForUnknown(name);
+  return { emoji: "🛒", locationId: d.locationId, dateKind: d.dateKind };
+}
 
 /** Work out the quantity + unit to track, given what was read and what the food usually comes in. */
 export function resolveQuantity(
@@ -245,7 +244,7 @@ export function lineToDraft(line: ParsedLine): ReviewDraft {
       rawText: line.rawText,
       name: tidyName(line.name) || "Unknown item",
       foodTypeId: null,
-      ...DEFAULT_UNKNOWN,
+      ...unknownDefaults(line.name),
       quantity,
       unit,
       price: line.price,

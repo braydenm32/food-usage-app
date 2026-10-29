@@ -24,11 +24,22 @@ const PLURAL: Partial<Record<Unit, string>> = {
   dozen: "dozen",
 };
 
-/** "×2", "500 g", "1 L", "2 tins", "½ loaf". */
+/** Trim to at most 2 decimals without trailing zeros: 1.5 → "1.5", 1.25 → "1.25", 2 → "2". */
+function trimDecimals(q: number): string {
+  return String(Math.round(q * 100) / 100);
+}
+
+/**
+ * "×2", "500 g", "1.2 kg", "1 L", "2 tins", "½ loaf".
+ * Folds large metric amounts: 1000 g or more shows as kg, 1000 ml or more as L.
+ */
 export function formatQuantity(q: number, unit: Unit): string {
+  if (unit === "g" && q >= 1000) return `${trimDecimals(q / 1000)} kg`;
+  if (unit === "ml" && q >= 1000) return `${trimDecimals(q / 1000)} L`;
+  if (unit === "g" || unit === "ml") return `${trimDecimals(q)} ${unit}`;
   const amount = formatAmount(q);
   if (unit === "item") return `×${amount}`;
-  if (unit === "g" || unit === "kg" || unit === "ml" || unit === "L") return `${amount} ${unit}`;
+  if (unit === "kg" || unit === "L") return `${amount} ${unit}`;
   const word = q > 1 ? (PLURAL[unit] ?? unit) : unit;
   return `${amount} ${word}`;
 }

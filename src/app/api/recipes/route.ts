@@ -7,16 +7,19 @@ import { ingredient, slugId } from "@/lib/recipes/map";
 import type { Recipe } from "@/lib/types";
 
 
+const MAX_BODY_BYTES = 64 * 1024;
+const shortList = z.array(z.string().max(60)).max(30).default([]);
+
 const RequestSchema = z.object({
   items: z.array(z.object({ name: z.string().min(1).max(80), daysLeft: z.number() })).max(80),
   profile: z.object({
     people: z.number().int().min(1).max(20).default(2),
-    diets: z.array(z.string()).default([]),
-    allergies: z.array(z.string()).default([]),
-    likes: z.array(z.string()).default([]),
-    dislikes: z.array(z.string()).default([]),
+    diets: shortList,
+    allergies: shortList,
+    likes: shortList,
+    dislikes: shortList,
   }),
-  mustUse: z.array(z.string()).max(20).optional(),
+  mustUse: z.array(z.string().max(80)).max(20).optional(),
   count: z.number().int().min(1).max(5).optional(),
 });
 
@@ -53,7 +56,11 @@ export async function POST(req: Request) {
 
   let input: z.infer<typeof RequestSchema>;
   try {
-    input = RequestSchema.parse(await req.json());
+    const body = await req.text();
+    if (body.length > MAX_BODY_BYTES) {
+      return NextResponse.json({ error: "too_large", message: "That request was too big." }, { status: 413 });
+    }
+    input = RequestSchema.parse(JSON.parse(body));
   } catch {
     return NextResponse.json({ error: "bad_request", message: "That request was not in the right shape." }, { status: 400 });
   }
@@ -77,7 +84,7 @@ export async function POST(req: Request) {
   try {
     const response = await client.messages.parse({
       model: AI_MODEL,
-      max_tokens: 8000,
+      max_tokens: 4000,
       system: SYSTEM,
       messages: [{ role: "user", content: prompt }],
       output_config: { format: zodOutputFormat(OutputSchema), effort: "low" },

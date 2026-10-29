@@ -3,7 +3,7 @@
 import { Bell, Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { z } from "zod";
-import { DEFAULT_LOCATIONS, useLarder } from "@/lib/store";
+import { DEFAULT_LOCATIONS, normalisePersisted, useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { notificationSupport, type NotificationSupport } from "@/lib/reminders";
@@ -280,10 +280,9 @@ export default function SettingsPage() {
       const d = parsed.data;
       // Keep the three default spots so nothing is orphaned.
       const locs = [...DEFAULT_LOCATIONS, ...d.locations.filter((l) => !DEFAULT_LOCATIONS.some((x) => x.id === l.id))];
+      // normalisePersisted fills missing arrays (diets, allergies…) and settings defaults.
       useLarder.setState({
-        ...(d as unknown as Parameters<typeof useLarder.setState>[0]),
-        locations: locs as StorageLocation[],
-        settings: { ...settings, ...(d.settings as Partial<Settings>) },
+        ...normalisePersisted({ ...d, locations: locs, settings: { ...settings, ...(d.settings as Partial<Settings>) } }),
         undo: null,
       });
       toast(`Restored ${d.items.length} item${d.items.length === 1 ? "" : "s"} and your settings`);

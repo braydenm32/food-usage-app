@@ -13,21 +13,23 @@
   --paper: #f2f4ee;
   --surface: #fbfcf8;
   --surface-2: #e8ece2;
-  --line: #d3d9cc;
+  --line: #c8d0c0;
   --ink: #1b2620;
   --ink-2: #4c5a52;
-  --ink-3: #6f7b73;
+  --ink-3: #5f6b63;
   --primary: #2d5b4c;
   --primary-ink: #f4f7f1;
   --primary-soft: #d9e6dd;
-  --fresh: #3f7d3a;
+  --fresh: #336b2f;
   --fresh-soft: #dcebd4;
-  --soon: #9a6a00;
+  --soon: #7d5600;
   --soon-soft: #f8e7b6;
-  --today: #b4481f;
+  --today: #9c3c17;
   --today-soft: #f9d9c8;
   --spoiled: #8e2346;
   --spoiled-soft: #f1d3dc;
+  /* Text on solid status colours (danger button, error toast, badges). */
+  --on-status: #ffffff;
   --focus: #2d5b4c;
   --shadow: 0 1px 0 rgb(27 38 32 / 0.04), 0 8px 24px -12px rgb(27 38 32 / 0.18);
 }
@@ -40,7 +42,7 @@
   --ink: #e6ece4;
   --ink-2: #b3bfb6;
   --ink-3: #8c9990;
-  --primary: #8cc5a8;
+  --primary: #6fae92;
   --primary-ink: #0f1a15;
   --primary-soft: #23382f;
   --fresh: #8fcf7f;
@@ -51,7 +53,8 @@
   --today-soft: #42241a;
   --spoiled: #f08aa9;
   --spoiled-soft: #3e1d29;
-  --focus: #8cc5a8;
+  --on-status: #1a0f12;
+  --focus: #6fae92;
   --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 10px 30px -14px rgb(0 0 0 / 0.6);
 }
 
@@ -74,6 +77,7 @@
   --color-today-soft: var(--today-soft);
   --color-spoiled: var(--spoiled);
   --color-spoiled-soft: var(--spoiled-soft);
+  --color-on-status: var(--on-status);
   --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-young-serif), ui-serif, Georgia, serif;
   --shadow-card: var(--shadow);
@@ -109,7 +113,7 @@ body {
 
 /* Bottom padding so content clears the tab bar and the iOS home indicator. */
 .pb-tabbar {
-  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  padding-bottom: calc(7rem + env(safe-area-inset-bottom));
 }
 @media (min-width: 1024px) {
   .pb-tabbar {
@@ -162,6 +166,12 @@ body {
 }
 .animate-toast-in {
   animation: toast-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Soft fade at the ends of a horizontal scroller (chip strips) so cut-off chips read as "more". */
+.fade-x {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 1rem, #000 calc(100% - 1.5rem), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 1rem, #000 calc(100% - 1.5rem), transparent 100%);
 }
 
 .scrollbar-none {

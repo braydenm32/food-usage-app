@@ -5,6 +5,7 @@ import { useMemo, useRef, useState, type FormEvent } from "react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { useNow } from "@/lib/use-now";
+import { defaultsForUnknown } from "@/lib/shelf-life/engine";
 import { FOOD_TYPES, getFoodType, matchFoodType, searchFoodTypes } from "@/lib/shelf-life/foods";
 import type { Aisle, DraftItem, FoodType, ShoppingListItem, Unit } from "@/lib/types";
 import { Button, Card, EmptyState, IconButton, Input, PageHeader, SectionTitle, Sheet, Stepper, cx } from "@/components/ui";
@@ -153,21 +154,21 @@ export default function ListPage() {
     const drafts: DraftItem[] = ticked.map((l) => {
       const match = l.foodTypeId ? undefined : matchFoodType(l.name);
       const food = getFoodType(l.foodTypeId) ?? (match?.confidence === "high" ? match.food : undefined);
+      const unknown = defaultsForUnknown(l.name);
       return {
         key: l.id,
         name: l.name,
         foodTypeId: food?.id ?? null,
         emoji: food?.emoji ?? "🛒",
-        locationId: food?.defaultLocation ?? "pantry",
+        locationId: food?.defaultLocation ?? unknown.locationId,
         quantity: l.quantity ?? food?.defaultQuantity ?? 1,
         unit: isUnit(l.unit) ? l.unit : (food?.defaultUnit ?? "item"),
-        dateKind: food?.dateKind ?? "best-before",
+        dateKind: food?.dateKind ?? unknown.dateKind,
         include: true,
       };
     });
-    const created = addItems(drafts, "list");
-    // addItems only clears ticked rows it could match by food type; clear the rest too.
-    for (const l of ticked) removeListItem(l.id);
+    // One undoable step: the items go in and the ticked rows come off the list.
+    const created = addItems(drafts, "list", { removeListIds: ticked.map((l) => l.id) });
     toast(`Put ${created.length} item${created.length === 1 ? "" : "s"} in the larder`, { undoable: true });
   };
 

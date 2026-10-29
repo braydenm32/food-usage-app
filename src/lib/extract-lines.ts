@@ -77,7 +77,8 @@ export async function extractWithClaude(
   try {
     const response = await client.messages.parse({
       model: AI_MODEL,
-      max_tokens: 16000,
+      // Enough for a long order (~100 lines) without letting one request run up a big bill.
+      max_tokens: 6000,
       system: SYSTEM,
       messages: [{ role: "user", content }],
       output_config: { effort: "low", format: zodOutputFormat(Extraction) },

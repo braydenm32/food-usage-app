@@ -1,6 +1,11 @@
 // Larder service worker: offline shell + notifications.
-const CACHE = "larder-v1";
-const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings"];
+// Bump the version when the caching rules or shell change; old caches are deleted on activate.
+const VERSION = 2;
+const CACHE = `larder-v${VERSION}`;
+const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/welcome"];
+
+/** Only cache complete, same-origin successes (no errors, redirects or opaque responses). */
+const cacheable = (res) => res && res.ok && res.type === "basic";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
@@ -25,8 +30,10 @@ self.addEventListener("fetch", (event) => {
         (hit) =>
           hit ||
           fetch(request).then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(request, copy));
+            if (cacheable(res)) {
+              const copy = res.clone();
+              caches.open(CACHE).then((c) => c.put(request, copy));
+            }
             return res;
           }),
       ),
@@ -37,8 +44,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(request, copy));
+          if (cacheable(res)) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(request, copy));
+          }
           return res;
         })
         .catch(() => caches.match(request).then((hit) => hit || caches.match("/"))),

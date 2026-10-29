@@ -94,6 +94,11 @@ export interface PantryItem {
   openedAt?: string; // ISO date-time
   frozenAt?: string;
   thawedAt?: string;
+  /**
+   * Set by the store when the item went into the freezer already past its date. Freezing
+   * doesn't make it safe, so the engine keeps it expired. Clear it with `updateItem(id, { expiredWhenFrozen: undefined })`.
+   */
+  expiredWhenFrozen?: boolean;
   /** Where the item came from. */
   source: "receipt" | "list" | "barcode" | "manual" | "order";
   barcode?: string;
@@ -115,6 +120,8 @@ export interface ItemEvent {
   /** AUD value of the quantity affected, when price is known. */
   value?: number;
   detail?: string;
+  /** Where the item went, recorded on "added" (and "moved") events; used for smart defaults. */
+  locationId?: LocationId;
 }
 
 /** Household-level overrides of the shelf-life table, learned from edits. */
