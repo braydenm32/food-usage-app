@@ -147,7 +147,9 @@ export function describeDaysLeft(info: ExpiryInfo, dateKind: PantryItem["dateKin
   if (d === 1) return "Use by tomorrow";
   if (d < 14) return `${est}${d} days left`;
   if (d < 60) return `${est}${Math.round(d / 7)} weeks left`;
-  return `${est}${Math.round(d / 30)} months left`;
+  if (d < 365) return `${est}${Math.round(d / 30)} months left`;
+  const years = Math.round(d / 365);
+  return `${est}${years} year${years === 1 ? "" : "s"} left`;
 }
 
 export const STATUS_ORDER: Record<ItemStatus, number> = {

@@ -89,12 +89,13 @@ export function searchFoodTypes(query: string, limit = 8): FoodType[] {
     const name = f.name.toLowerCase();
     let s = 0;
     if (name === q) s = 100;
+    else if (f.aliases.includes(q)) s = 90; // "milk" → full cream milk, not milk powder
     else if (name.startsWith(q)) s = 80;
     else if (name.split(" ").some((w) => w.startsWith(q))) s = 60;
     else if (f.aliases.some((a) => a.startsWith(q))) s = 50;
     else if (name.includes(q) || f.aliases.some((a) => a.includes(q))) s = 30;
     return { f, s };
   }).filter((x) => x.s > 0);
-  scored.sort((a, b) => b.s - a.s || a.f.name.length - b.f.name.length);
+  scored.sort((a, b) => b.s - a.s || Number(!!b.f.staple) - Number(!!a.f.staple) || a.f.name.length - b.f.name.length);
   return scored.slice(0, limit).map((x) => x.f);
 }

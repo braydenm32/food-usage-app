@@ -4,6 +4,7 @@ import { ThemeProvider, useTheme } from "next-themes";
 import { useEffect, type ReactNode } from "react";
 import { useLarder } from "@/lib/store";
 import { Toaster } from "@/components/toast";
+import { ReminderRunner } from "@/components/reminder-runner";
 
 /** Keeps next-themes in step with the theme saved in settings. */
 function ThemeSync() {
@@ -26,6 +27,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <ThemeSync />
       <ServiceWorker />
+      <ReminderRunner />
       {children}
       <Toaster />
     </ThemeProvider>

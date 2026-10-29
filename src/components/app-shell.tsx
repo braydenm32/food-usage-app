@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { BookOpen, Home, Plus, ShoppingBasket, Warehouse, Settings } from "lucide-react";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 
@@ -21,16 +21,32 @@ function isActive(pathname: string, href: string) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  // Navigation reads the pathname, so it sits in its own Suspense boundaries and the page can prerender.
+  return (
+    <div className="lg:flex lg:min-h-dvh">
+      <Suspense fallback={null}>
+        <DesktopNav />
+      </Suspense>
+      <main className="pb-tabbar mx-auto w-full max-w-3xl lg:px-10">{children}</main>
+      <Suspense fallback={null}>
+        <MobileNav />
+      </Suspense>
+    </div>
+  );
+}
+
+function useNavState() {
   const pathname = usePathname();
   const hydrated = useHydrated();
   const listCount = useLarder((s) => s.shoppingList.filter((l) => !l.checked).length);
-
   // Onboarding is a full-screen flow without navigation.
-  if (pathname.startsWith("/welcome")) return <>{children}</>;
+  return { pathname, hidden: pathname.startsWith("/welcome"), listCount: hydrated ? listCount : 0 };
+}
 
+function DesktopNav() {
+  const { pathname, hidden, listCount } = useNavState();
+  if (hidden) return null;
   return (
-    <div className="lg:flex lg:min-h-dvh">
-      {/* Desktop rail */}
       <nav aria-label="Main" className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-64 lg:shrink-0 lg:flex-col lg:border-r lg:border-line lg:px-4 lg:py-8">
         <Link href="/" className="mb-8 px-3 font-display text-3xl text-ink">
           Larder
@@ -50,7 +66,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 >
                   <Icon size={20} aria-hidden />
                   {label === "Add" ? "Add food" : label}
-                  {href === "/list" && hydrated && listCount > 0 && (
+                  {href === "/list" && listCount > 0 && (
                     <span className="ml-auto rounded-full bg-surface-2 px-2 text-xs tabular-nums text-ink-2">{listCount}</span>
                   )}
                 </Link>
@@ -71,9 +87,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Link>
       </nav>
 
-      <main className="pb-tabbar mx-auto w-full max-w-3xl lg:px-10">{children}</main>
+  );
+}
 
-      {/* Mobile tab bar */}
+function MobileNav() {
+  const { pathname, hidden, listCount } = useNavState();
+  if (hidden) return null;
+  return (
       <nav
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
@@ -104,7 +124,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   >
                     <Icon size={22} aria-hidden strokeWidth={active ? 2.4 : 2} />
                     {label}
-                    {href === "/list" && hydrated && listCount > 0 && (
+                    {href === "/list" && listCount > 0 && (
                       <span className="absolute right-[calc(50%-1.25rem)] top-2 min-w-4 rounded-full bg-today px-1 text-[10px] leading-4 text-white">
                         {listCount}
                       </span>
@@ -116,6 +136,5 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </ul>
       </nav>
-    </div>
   );
 }
