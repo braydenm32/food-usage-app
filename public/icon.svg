@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="0" fill="#f2f4ee"/>
+  
+  <g transform="translate(6 6) scale(0.88)">
+    <!-- lid -->
+    <rect x="30" y="12" width="40" height="11" rx="4" fill="#2d5b4c"/>
+    <rect x="34" y="7" width="32" height="6" rx="3" fill="#2d5b4c"/>
+    <!-- jar body -->
+    <path d="M26 27 h48 a6 6 0 0 1 6 6 v48 a10 10 0 0 1 -10 10 h-40 a10 10 0 0 1 -10 -10 v-48 a6 6 0 0 1 6 -6 z" fill="#2d5b4c"/>
+    <!-- contents: a leaf cut out of the jar -->
+    <path d="M50 80 C 28 72, 28 50, 50 36 C 72 50, 72 72, 50 80 Z" fill="#f2f4ee"/>
+    <path d="M50 78 V 44" stroke="#2d5b4c" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M50 66 L 41 58 M50 58 L 58 51" stroke="#2d5b4c" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>
