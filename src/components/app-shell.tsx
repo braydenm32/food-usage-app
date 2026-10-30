@@ -7,6 +7,7 @@ import { BookOpen, CalendarDays, ChartColumn, Home, Plus, ShoppingBasket, Wareho
 import { Suspense, useSyncExternalStore, type ReactNode } from "react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
+import { RailSyncStatus } from "@/components/sync-indicator";
 // Registers the install-prompt listener early, before the Today screen shows the card.
 import "@/components/install-card";
 
@@ -100,14 +101,17 @@ function DesktopNav() {
             );
           })}
         </ul>
-        <Link
-          href="/settings"
-          aria-current={isActive(pathname, "/settings") ? "page" : undefined}
-          className={clsx("mt-auto", railLink(isActive(pathname, "/settings")))}
-        >
-          <Settings size={20} aria-hidden />
-          Settings
-        </Link>
+        <div className="mt-auto flex flex-col gap-1">
+          <RailSyncStatus active={isActive(pathname, "/account") || isActive(pathname, "/join")} />
+          <Link
+            href="/settings"
+            aria-current={isActive(pathname, "/settings") ? "page" : undefined}
+            className={railLink(isActive(pathname, "/settings"))}
+          >
+            <Settings size={20} aria-hidden />
+            Settings
+          </Link>
+        </div>
       </nav>
 
   );
