@@ -6,41 +6,47 @@
  * Push: every local change to a synced collection is diffed by id and queued in a persisted
  * outbox (`larder-sync`). The outbox is flushed ~600 ms after the last change, when the device
  * comes back online and when the app comes to the front, in batches of 200 upserts. Entries
- * leave the outbox only once the server has them, so nothing is lost offline.
+ * leave the outbox only once the server has them, so nothing is lost offline. A record the
+ * server can never take (too big, or refused as data) is set aside as "failed" rather than
+ * blocking everything behind it.
  *
- * Pull: rows with `seq` above the cursor, in seq order, 1000 at a time, applied to the store
- * under an `applying` guard so they aren't queued straight back up. Realtime only says
- * "something changed"; each event runs the same incremental pull, which keeps ordering simple.
+ * Pull: the `pull_household_records` RPC returns rows with `seq` above the cursor, in seq order,
+ * 500 at a time, applied to the store under an `applying` guard so they aren't queued straight
+ * back up. Realtime only says "something changed"; each event runs the same incremental pull,
+ * which keeps ordering simple.
+ *
+ * Network work is serialised in this tab and, through the Web Locks API, across tabs, so two
+ * tabs never send the same outbox at once.
  */
 import type { RealtimeChannel, Session } from "@supabase/supabase-js";
 import { DEFAULT_LOCATIONS, isRehydratingFromOtherTab, useLarder, type LarderState } from "@/lib/store";
 import { getSupabase, type LarderClient } from "@/lib/supabase/client";
-import { applyRemote, localOnly, replacedState, type RemoteRow } from "@/lib/sync/apply";
+import { applyRemote, localOnly, parsePullPage, replacedState } from "@/lib/sync/apply";
 import { sameRecord, type SyncedState } from "@/lib/sync/collections";
 import {
   ack,
   allRecords,
-  buildRows,
   diffState,
   emptyMeta,
   enqueue,
   nextBatch,
   parseMeta,
   pendingCount,
+  prepareBatch,
+  quarantine,
+  requeueFailed,
+  type OutboxEntry,
+  type RecordRow,
   type SyncMeta,
 } from "@/lib/sync/outbox";
 import { syncStatusStore, type SyncState } from "@/lib/sync/status";
 
 export const SYNC_STORAGE_KEY = "larder-sync";
 const BATCH = 200;
-const PAGE = 1000;
+const PAGE = 500;
 const FLUSH_DELAY = 600;
-/**
- * Pull a little behind the cursor. `seq` is taken when a write starts, so two writes committing
- * out of order could otherwise be skipped. Re-reading a few rows is harmless: the table holds
- * only each record's latest version, and identical records change nothing.
- */
-const LOOKBACK = 100;
+/** Web Lock held while a tab talks to the server. */
+const LOCK_NAME = "larder-sync";
 
 export type BindMode =
   /** New household: upload everything on this device. */
@@ -71,6 +77,19 @@ function friendly(e: unknown): SyncError {
   return new SyncError(err?.message || "Something went wrong while syncing", err?.code);
 }
 
+/** Postgres data (22xxx) and integrity (23xxx) errors: the rows are the problem, not the network. */
+const isRowError = (e: unknown) => /^2[23]/.test(String((e as { code?: unknown } | null)?.code ?? ""));
+
+/** Run with the cross-tab sync lock where the browser has one; otherwise just run. */
+function withSyncLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  if (!locks?.request) return task();
+  // The lock is held until the task settles (the callback's promise).
+  return new Promise<T>((resolve, reject) => {
+    void locks.request(LOCK_NAME, () => task().then(resolve, reject)).catch(reject);
+  });
+}
+
 function readMeta(): SyncMeta {
   try {
     return parseMeta(localStorage.getItem(SYNC_STORAGE_KEY));
@@ -97,6 +116,9 @@ export class SyncEngine {
   private ready = false;
   private verified: string | null = null;
   private cleanups: Array<() => void> = [];
+  /** What this tab last wrote to storage, and whether that write worked. */
+  private written: string | null = null;
+  private writeOk = true;
 
   constructor(private readonly client: LarderClient) {}
 
@@ -121,6 +143,7 @@ export class SyncEngine {
       if (e.key !== SYNC_STORAGE_KEY) return;
       // Another tab changed the binding or the outbox.
       this.meta = parseMeta(e.newValue);
+      this.written = e.newValue;
       this.reconcile();
     };
     window.addEventListener("online", wake);
@@ -158,12 +181,33 @@ export class SyncEngine {
 
   private save(meta: SyncMeta) {
     this.meta = meta;
+    const raw = JSON.stringify(meta);
+    this.written = raw;
     try {
-      localStorage.setItem(SYNC_STORAGE_KEY, JSON.stringify(meta));
+      localStorage.setItem(SYNC_STORAGE_KEY, raw);
+      this.writeOk = true;
     } catch {
       /* storage full: the outbox stays in memory for this session */
+      this.writeOk = false;
     }
     this.publish();
+  }
+
+  /**
+   * Pick up what another tab saved while this one waited for the lock (its storage event may
+   * not have arrived yet). Skipped when our own last save failed: memory is newer then.
+   */
+  private refreshMeta() {
+    if (!this.writeOk) return;
+    try {
+      const raw = localStorage.getItem(SYNC_STORAGE_KEY);
+      if (raw !== null && raw !== this.written) {
+        this.meta = parseMeta(raw);
+        this.written = raw;
+      }
+    } catch {
+      /* unreadable: keep what's in memory */
+    }
   }
 
   private onSession(session: Session | null) {
@@ -172,7 +216,12 @@ export class SyncEngine {
     this.ready = true;
     if (session && this.meta.householdId && this.meta.userId && this.meta.userId !== session.user.id) {
       // A different account signed in on this device: don't send its changes to the old household.
+      // (Signing out through the app flushes and asks first; this only catches other routes.)
+      const dropped = pendingCount(this.meta);
       this.save({ ...emptyMeta() });
+      if (dropped > 0) {
+        this.notice = `A different account signed in, so ${dropped} change${dropped === 1 ? "" : "s"} that hadn't synced to the previous household won't be sent. Your food is still on this device.`;
+      }
     }
     if (session?.user.id !== prevUser) this.verified = null;
     this.reconcile();
@@ -236,7 +285,10 @@ export class SyncEngine {
       this.active++;
       this.publish();
       try {
-        const r = await task();
+        const r = await withSyncLock(() => {
+          this.refreshMeta();
+          return task();
+        });
         this.onSuccess();
         return r;
       } catch (e) {
@@ -270,40 +322,83 @@ export class SyncEngine {
   private async flushAll() {
     while (this.syncing && pendingCount(this.meta) > 0) {
       const hid = this.householdId!;
-      const batch = nextBatch(this.meta, BATCH);
-      const rows = buildRows(batch, useLarder.getState(), hid);
-      const { error } = await this.client.from("household_records").upsert(rows, {
-        onConflict: "household_id,collection,id",
-      });
-      if (error) throw error;
-      // The binding may have changed while the request was out.
-      if (this.householdId !== hid) return;
-      this.save({ ...ack(this.meta, batch), lastSyncedAt: new Date().toISOString() });
+      const batch = prepareBatch(nextBatch(this.meta, BATCH), useLarder.getState(), hid);
+      if (batch.tooLarge.length) this.save(quarantine(this.meta, batch.tooLarge, "too-large"));
+      if (!(await this.send(hid, batch.entries, batch.rows))) return;
     }
   }
 
-  private async pullNow(seen?: Set<string>, from?: number) {
+  /**
+   * Upsert one batch. When the database refuses it as data (22xxx/23xxx), halve it until the bad
+   * rows are found, set those aside, and send the rest. Anything else (offline, 5xx, limits)
+   * throws for the usual backoff. False when the binding changed while a request was out.
+   */
+  private async send(hid: string, entries: OutboxEntry[], rows: RecordRow[]): Promise<boolean> {
+    if (rows.length === 0) return true;
+    const { error } = await this.client.from("household_records").upsert(rows, {
+      onConflict: "household_id,collection,id",
+    });
+    if (this.householdId !== hid) return false;
+    if (error) {
+      if (!isRowError(error)) throw error;
+      if (rows.length === 1) {
+        this.save(quarantine(this.meta, entries, "rejected"));
+        return true;
+      }
+      const mid = Math.ceil(rows.length / 2);
+      return (await this.send(hid, entries.slice(0, mid), rows.slice(0, mid))) && this.send(hid, entries.slice(mid), rows.slice(mid));
+    }
+    this.save({ ...ack(this.meta, entries), lastSyncedAt: new Date().toISOString() });
+    return true;
+  }
+
+  /**
+   * Pull everything after the cursor, a page at a time. The RPC's cursor never moves past a row
+   * whose write might still be joined by an earlier, slower one, so recent rows come back on the
+   * next pull (applying a row twice changes nothing).
+   *
+   * A full page whose tail isn't settled yet still reads on (from the last row seen) so the pull
+   * reaches the end, but the saved cursor stays at the last settled point.
+   *
+   * While a merge is owed, it reads from the start; once it reaches the end, the local-only
+   * records are queued to go up.
+   */
+  private async pullNow() {
     if (!this.syncing) return;
     const hid = this.householdId!;
-    let after = from ?? Math.max(0, this.meta.cursor - LOOKBACK);
+    const merging = this.meta.pendingMerge;
+    const seen = merging ? new Set<string>() : undefined;
+    let after = merging ? 0 : this.meta.cursor;
+    let cursor = this.meta.cursor;
+    let settled = true;
     for (;;) {
-      const { data, error } = await this.client
-        .from("household_records")
-        .select("collection,id,data,deleted,seq")
-        .eq("household_id", hid)
-        .gt("seq", after)
-        .order("seq", { ascending: true })
-        .limit(PAGE);
+      const { data, error } = await this.client.rpc("pull_household_records", { hid, after_seq: after, max_rows: PAGE });
       if (error) throw error;
       if (this.householdId !== hid) return;
-      const rows = (data ?? []) as RemoteRow[];
-      const result = applyRemote(useLarder.getState(), rows, this.meta.outbox, this.meta.cursor);
+      const page = parsePullPage(data);
+      const result = applyRemote(useLarder.getState(), page.rows, this.meta.outbox, after);
       this.applyToStore(result.patch);
       result.seen.forEach((k) => seen?.add(k));
-      if (rows.length) after = rows[rows.length - 1].seq;
-      this.save({ ...this.meta, cursor: result.cursor, lastSyncedAt: new Date().toISOString() });
-      if (rows.length < PAGE) return;
+      if (settled) cursor = Math.max(cursor, page.cursor);
+      if (page.cursor < page.lastSeq) settled = false;
+      this.save({ ...this.meta, cursor, lastSyncedAt: new Date().toISOString() });
+      if (!page.more && page.count < PAGE) break;
+      if (page.lastSeq <= after) break; // Nothing new: don't spin.
+      after = page.lastSeq;
     }
+    if (seen && this.meta.pendingMerge) this.finishMerge(seen);
+  }
+
+  /** The household's records are all here: queue what only this device has. */
+  private finishMerge(seen: Set<string>) {
+    const state = useLarder.getState();
+    // Built-in spots the household doesn't have yet are identical everywhere; skip them.
+    const fresh = localOnly(state, seen).filter(
+      (ch) =>
+        !(ch.c === "locations" && DEFAULT_LOCATIONS.some((d) => d.id === ch.id && sameRecord(d, state.locations.find((l) => l.id === ch.id)))),
+    );
+    this.save({ ...enqueue(this.meta, fresh), pendingMerge: false });
+    this.scheduleFlush();
   }
 
   private schedulePull() {
@@ -376,7 +471,8 @@ export class SyncEngine {
    * Start syncing this device with a household.
    * - upload: everything here goes up (a brand-new household).
    * - merge: pull everything the household has (it wins on shared records such as the built-in
-   *   spots and the household profile), then upload what only this device has.
+   *   spots and the household profile), then upload what only this device has. The owed merge
+   *   is persisted (`pendingMerge`), so if the first pull fails a later one finishes it.
    * - replace: clear this device's synced data, then pull everything.
    */
   async bind(householdId: string, householdName: string | null, mode: BindMode) {
@@ -386,7 +482,7 @@ export class SyncEngine {
     this.notice = null;
     this.verified = householdId;
     if (mode === "replace") this.applyToStore(replacedState());
-    this.save({ ...emptyMeta(), householdId, householdName, userId: uid });
+    this.save({ ...emptyMeta(), householdId, householdName, userId: uid, pendingMerge: mode === "merge" });
     if (mode === "upload") {
       this.save(enqueue(this.meta, allRecords(useLarder.getState())));
     }
@@ -394,19 +490,8 @@ export class SyncEngine {
     let failure: SyncError | null = null;
     const task = async () => {
       try {
-        if (mode === "merge") {
-          const seen = new Set<string>();
-          await this.pullNow(seen, 0);
-          const state = useLarder.getState();
-          // Built-in spots the household doesn't have yet are identical everywhere; skip them.
-          const fresh = localOnly(state, seen).filter(
-            (ch) =>
-              !(ch.c === "locations" && DEFAULT_LOCATIONS.some((d) => d.id === ch.id && sameRecord(d, state.locations.find((l) => l.id === ch.id)))),
-          );
-          this.save(enqueue(this.meta, fresh));
-        } else if (mode === "replace") {
-          await this.pullNow(undefined, 0);
-        }
+        // The cursor starts at 0, so this reads everything (and finishes a merge).
+        if (mode !== "upload") await this.pullNow();
         await this.flushAll();
         if (mode === "upload") await this.pullNow();
       } catch (e) {
@@ -417,6 +502,28 @@ export class SyncEngine {
     await this.run(task);
     // The binding stands either way; the outbox and cursor make a retry pick up where it stopped.
     if (failure) throw failure;
+  }
+
+  /**
+   * Try to send queued changes now, before something that would drop them (signing out,
+   * leaving, switching household). Resolves to how many are still unsent.
+   */
+  async flushPending(): Promise<number> {
+    if (this.syncing && navigator.onLine && pendingCount(this.meta) > 0) await this.run(() => this.flushAll());
+    return this.syncing ? pendingCount(this.meta) : 0;
+  }
+
+  /** Put changes that failed back in the queue (after the record was trimmed, say). */
+  retryFailed() {
+    if (!this.meta.failed.length) return;
+    this.save(requeueFailed(this.meta));
+    this.scheduleFlush();
+  }
+
+  /** Forget about changes that failed; they stay on this device only. */
+  clearFailed() {
+    if (!this.meta.failed.length) return;
+    this.save({ ...this.meta, failed: [] });
   }
 
   /** Stop syncing on this device. Local data stays; queued changes are dropped. */
@@ -482,6 +589,7 @@ export class SyncEngine {
       email: this.session?.user.email ?? null,
       householdId: this.syncing ? this.meta.householdId : null,
       householdName: this.syncing ? this.meta.householdName : null,
+      failed: this.syncing ? this.meta.failed : [],
       notice: this.notice,
     });
   }

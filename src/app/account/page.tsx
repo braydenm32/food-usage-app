@@ -24,10 +24,18 @@ import {
   type Member,
   type Membership,
 } from "@/lib/sync/household";
-import { describeSync, timeAgo, useSyncStatus } from "@/lib/sync/status";
+import { describeFailed, describeSync, timeAgo, useSyncStatus } from "@/lib/sync/status";
 import { useNow } from "@/lib/use-now";
 import { AuthPanel } from "@/components/account/auth-panel";
-import { JoinModeChoice, NotConfigured, Notice, SkeletonCards, useAuthReturn, type JoinMode } from "@/components/account/shared";
+import {
+  JoinModeChoice,
+  NotConfigured,
+  Notice,
+  SkeletonCards,
+  unsyncedWarning,
+  useAuthReturn,
+  type JoinMode,
+} from "@/components/account/shared";
 import { SyncIcon } from "@/components/sync-indicator";
 import { Button, Card, Field, Input, PageHeader } from "@/components/ui";
 import { toast } from "@/components/toast";
@@ -332,6 +340,7 @@ function HouseholdView() {
             Sync now
           </Button>
         )}
+        <FailedChanges />
       </Card>
 
       <section aria-labelledby="members-heading">
@@ -382,9 +391,40 @@ function HouseholdView() {
       </section>
 
       <InviteCard householdId={hid} householdName={status.householdName ?? "your household"} />
-      <LeaveCard householdId={hid} householdName={status.householdName ?? "this household"} />
+      <LeaveCard
+        householdId={hid}
+        householdName={status.householdName ?? "this household"}
+        lastOne={!members.loading && !members.error && members.list.length <= 1}
+      />
       <AccountCard />
     </>
+  );
+}
+
+/** Changes set aside because the server can't take them: say so, and offer a retry. */
+function FailedChanges() {
+  const failed = useSyncStatus((s) => s.failed);
+  const line = describeFailed(failed);
+  if (!line) return null;
+  const tooLarge = failed.every((f) => f.reason === "too-large");
+  return (
+    <div className="mt-4 rounded-xl bg-soon-soft p-3">
+      <p className="text-sm text-ink">{line}.</p>
+      <p className="mt-1 text-sm text-ink-2">
+        {tooLarge
+          ? "They're still on this device. Shortening long notes or recipes, then trying again, usually fixes it."
+          : "They're still on this device, but the household won't see them."}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button variant="secondary" size="sm" onClick={() => getSyncEngine()?.retryFailed()}>
+          <RefreshCw size={14} aria-hidden />
+          Try again
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => getSyncEngine()?.clearFailed()}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -518,10 +558,12 @@ function InviteCard({ householdId, householdName }: { householdId: string; house
   );
 }
 
-function LeaveCard({ householdId, householdName }: { householdId: string; householdName: string }) {
+function LeaveCard({ householdId, householdName, lastOne }: { householdId: string; householdName: string; lastOne: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Changes still unsent after trying to flush; leaving again means accepting they're lost. */
+  const [unsynced, setUnsynced] = useState(0);
 
   const leave = async () => {
     const client = getSupabase();
@@ -530,9 +572,21 @@ function LeaveCard({ householdId, householdName }: { householdId: string; househ
     setBusy(true);
     setError(null);
     try {
+      if (!unsynced) {
+        const left = await engine.flushPending();
+        if (left > 0) {
+          setUnsynced(left);
+          setBusy(false);
+          return;
+        }
+      }
       await leaveHousehold(client, householdId);
       engine.unbind();
-      toast(`You've left ${householdName}. Your food is still on this device.`);
+      toast(
+        lastOne
+          ? `You've left ${householdName}. You were the last person in it, so the household has been deleted. Your food is still on this device.`
+          : `You've left ${householdName}. Your food is still on this device.`,
+      );
     } catch (e) {
       setError(explain(e, "Couldn't leave the household."));
       setBusy(false);
@@ -558,13 +612,29 @@ function LeaveCard({ householdId, householdName }: { householdId: string; househ
           </p>
           <p id="leave-body" className="mt-1 text-sm text-ink-2">
             You&apos;ll keep what&apos;s on this device, but changes will stop syncing both ways. To come back you&apos;ll need a new invite.
+            {lastOne
+              ? ` You're the only one in ${householdName}, so leaving deletes it for good.`
+              : " If you're the last person in it, the household is deleted."}
           </p>
+          {unsynced > 0 && (
+            <div className="mt-3">
+              <Notice tone="warn">{unsyncedWarning(unsynced)}</Notice>
+            </div>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setConfirm(false)} autoFocus>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setConfirm(false);
+                setUnsynced(0);
+              }}
+              autoFocus
+            >
               Stay
             </Button>
             <Button variant="danger" size="sm" onClick={() => void leave()} disabled={busy}>
-              {busy ? "Leaving…" : "Leave household"}
+              {busy ? "Leaving…" : unsynced > 0 ? "Leave anyway" : "Leave household"}
             </Button>
           </div>
           {error && (
@@ -579,15 +649,23 @@ function LeaveCard({ householdId, householdName }: { householdId: string; househ
 }
 
 function AccountCard() {
-  const { email, pending, householdId } = useSyncStatus();
-  const [confirm, setConfirm] = useState(false);
+  const { email } = useSyncStatus();
+  /** Changes still unsent after trying to flush; non-zero shows the confirm. */
+  const [unsynced, setUnsynced] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  const signOut = async () => {
+  const signOut = async (force = false) => {
     const engine = getSyncEngine();
     if (!engine) return;
     setBusy(true);
     try {
+      if (!force) {
+        const left = await engine.flushPending();
+        if (left > 0) {
+          setUnsynced(left);
+          return;
+        }
+      }
       await engine.signOut();
       toast("Signed out. Your food is still on this device.");
     } catch {
@@ -604,30 +682,23 @@ function AccountCard() {
           <p className="text-sm text-ink-2">Signed in as</p>
           <p className="truncate text-[15px] font-medium text-ink">{email ?? "your account"}</p>
         </div>
-        {!confirm && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="shrink-0"
-            onClick={() => (householdId && pending > 0 ? setConfirm(true) : void signOut())}
-            disabled={busy}
-          >
+        {!unsynced && (
+          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => void signOut()} disabled={busy}>
             <LogOut size={14} aria-hidden />
             {busy ? "Signing out…" : "Sign out"}
           </Button>
         )}
       </div>
-      {confirm && (
+      {unsynced > 0 && (
         <div className="mt-3 rounded-xl bg-soon-soft p-3" role="alertdialog" aria-labelledby="signout-heading">
           <p id="signout-heading" className="text-sm text-ink">
-            {pending} change{pending === 1 ? " hasn't" : "s haven't"} synced yet. If you sign out now, they stay on this device but
-            won&apos;t reach the household.
+            {unsyncedWarning(unsynced)}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setConfirm(false)} autoFocus>
+            <Button variant="secondary" size="sm" onClick={() => setUnsynced(0)} autoFocus>
               Stay signed in
             </Button>
-            <Button variant="danger" size="sm" onClick={() => void signOut()} disabled={busy}>
+            <Button variant="danger" size="sm" onClick={() => void signOut(true)} disabled={busy}>
               Sign out anyway
             </Button>
           </div>

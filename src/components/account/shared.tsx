@@ -32,6 +32,11 @@ export function useAuthReturn(): string | null {
   return error;
 }
 
+/** "3 changes haven't synced yet and will be lost": shared wording for leave, sign out and switching. */
+export function unsyncedWarning(pending: number, householdName = "the household"): string {
+  return `${pending} change${pending === 1 ? " hasn't" : "s haven't"} synced yet and will be lost. They stay on this device, but won't reach ${householdName}.`;
+}
+
 export type JoinMode = "merge" | "replace";
 
 /** "Bring the food on this device" vs "Start fresh with the household's food". */

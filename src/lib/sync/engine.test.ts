@@ -1,6 +1,7 @@
 /**
  * The engine against an in-memory fake of the Supabase calls it makes: echo suppression,
- * offline retries, outbox-wins, and the merge/replace join modes.
+ * offline retries, outbox-wins, the merge/replace join modes, poison rows and the
+ * commit-safe pull cursor.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DraftItem } from "@/lib/types";
@@ -42,7 +43,15 @@ class FakeServer {
   rows = new Map<string, Row>();
   seq = 0;
   failUpserts = 0;
+  /** Pulls fail (network) while this is above zero. */
+  failPulls = 0;
   upsertCalls = 0;
+  /** after_seq of each pull, in order. */
+  pullCalls: number[] = [];
+  /** Refuse a whole upsert as data (like a check constraint) when any row matches. */
+  rejectRow: ((r: Omit<Row, "seq">) => boolean) | null = null;
+  /** Rows above this seq count as "not settled yet" (written under a minute ago). */
+  settledUpTo = Infinity;
   onChange: (() => void) | null = null;
   write(r: Omit<Row, "seq">) {
     const row = { ...r, data: r.deleted ? null : JSON.parse(JSON.stringify(r.data)), seq: ++this.seq };
@@ -73,6 +82,9 @@ function fakeClient(server: FakeServer) {
           server.failUpserts--;
           throw new TypeError("Failed to fetch");
         }
+        if (server.rejectRow && rows.some(server.rejectRow)) {
+          return { error: { code: "23514", message: "new row violates check constraint" } };
+        }
         rows.forEach((r) => server.write(r));
         server.onChange?.();
         return { error: null };
@@ -91,7 +103,34 @@ function fakeClient(server: FakeServer) {
     on: () => channel,
     subscribe: () => channel,
   };
+  /** Same contract as `pull_household_records` in the harden migration. */
+  const rpc = async (fn: string, args: { hid: string; after_seq: number; max_rows: number }) => {
+    if (fn !== "pull_household_records") return { data: null, error: { message: `unknown rpc ${fn}` } };
+    if (server.failPulls > 0) {
+      server.failPulls--;
+      throw new TypeError("Failed to fetch");
+    }
+    server.pullCalls.push(args.after_seq);
+    const page = server
+      .all(args.hid)
+      .filter((r) => r.seq > args.after_seq)
+      .sort((a, b) => a.seq - b.seq)
+      .slice(0, args.max_rows);
+    const settled = page.filter((r) => r.seq <= server.settledUpTo).map((r) => r.seq);
+    const settledMax = settled.length ? Math.max(...settled) : 0;
+    const last = page.length ? page[page.length - 1].seq : 0;
+    return {
+      data: {
+        rows: page.map(({ collection, id, data, deleted, seq }) => ({ collection, id, data, deleted, seq })),
+        cursor: Math.max(settledMax, args.after_seq),
+        more: page.length === args.max_rows && settledMax === last,
+        server_time: new Date().toISOString(),
+      },
+      error: null,
+    };
+  };
   return {
+    rpc,
     auth: {
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
       getSession: async () => ({ data: { session } }),
@@ -125,6 +164,21 @@ const draft = (name: string): DraftItem => ({
   unit: "item",
   dateKind: "best-before",
   include: true,
+});
+
+/** A complete item as another device would have written it. */
+const remoteItem = (id: string, name: string) => ({
+  id,
+  name,
+  foodTypeId: null,
+  emoji: "🧀",
+  locationId: "fridge",
+  quantity: 1,
+  initialQuantity: 1,
+  unit: "item",
+  addedAt: "2026-10-01T00:00:00.000Z",
+  dateKind: "best-before",
+  source: "manual",
 });
 
 let server: FakeServer;
@@ -175,7 +229,7 @@ describe("SyncEngine", () => {
       household_id: "h1",
       collection: "items",
       id: "remote-1",
-      data: { ...s().items[0], id: "remote-1", name: "Bread", quantity: 1, unit: "loaf", locationId: "pantry" },
+      data: { ...remoteItem("remote-1", "Bread"), unit: "loaf", locationId: "pantry" },
       deleted: false,
     });
     engine.syncNow();
@@ -227,7 +281,7 @@ describe("SyncEngine", () => {
   });
 
   it("merge: keeps this device's food, adds the household's, and uploads only what's new", async () => {
-    server.write({ household_id: "h2", collection: "items", id: "theirs", data: { name: "Their cheese", id: "theirs" }, deleted: false });
+    server.write({ household_id: "h2", collection: "items", id: "theirs", data: remoteItem("theirs", "Their cheese"), deleted: false });
     server.write({
       household_id: "h2",
       collection: "profile",
@@ -247,7 +301,7 @@ describe("SyncEngine", () => {
   });
 
   it("replace: drops this device's synced data and takes the household's", async () => {
-    server.write({ household_id: "h2", collection: "items", id: "theirs", data: { name: "Their cheese", id: "theirs" }, deleted: false });
+    server.write({ household_id: "h2", collection: "items", id: "theirs", data: remoteItem("theirs", "Their cheese"), deleted: false });
     s().addItems([draft("My apples")], "manual");
     s().setSettings({ useSoonDays: 5 });
     await engine.bind("h2", "Their place", "replace");
@@ -265,5 +319,115 @@ describe("SyncEngine", () => {
     expect(s().items).toHaveLength(1);
     expect(server.all("h1").some((r) => r.collection === "items")).toBe(false);
     expect(meta().householdId).toBeNull();
+  });
+  it("pulls through the RPC and keeps the cursor behind rows that may not have settled", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    const settledSeq = server.seq;
+    server.settledUpTo = settledSeq;
+    server.write({ household_id: "h1", collection: "items", id: "r1", data: remoteItem("r1", "Bread"), deleted: false });
+    engine.syncNow();
+    await settle();
+    // Applied straight away, but the cursor stays put so the row is read again next time.
+    expect(s().items.map((i) => i.name)).toContain("Bread");
+    expect(meta().cursor).toBe(settledSeq);
+    server.settledUpTo = Infinity;
+    server.pullCalls = [];
+    engine.syncNow();
+    await settle();
+    expect(server.pullCalls[0]).toBe(settledSeq);
+    expect(meta().cursor).toBe(server.seq);
+  });
+
+  it("reads past a full page whose tail hasn't settled, without moving the cursor past it", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    const start = server.seq;
+    for (let i = 0; i < 600; i++) {
+      server.write({ household_id: "h1", collection: "events", id: `e${i}`, data: { id: `e${i}`, itemId: "x", itemName: "X", foodTypeId: null, type: "used", at: "2026-10-01T00:00:00Z" }, deleted: false });
+    }
+    // Only the first 100 new rows have settled: the first page (500) ends unsettled.
+    server.settledUpTo = start + 100;
+    engine.syncNow();
+    await settle();
+    expect(s().events).toHaveLength(600);
+    expect(meta().cursor).toBe(start + 100);
+  });
+
+  it("sets aside a record that's too large instead of blocking the rest", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Small"), draft("Big")], "manual");
+    const big = s().items.find((i) => i.name === "Big")!;
+    s().updateItem(big.id, { notes: "x".repeat(70_000) });
+    await settle();
+    expect(server.all("h1").some((r) => (r.data as { name?: string } | null)?.name === "Small")).toBe(true);
+    expect(server.rows.has(`h1/items/${big.id}`)).toBe(false);
+    expect(meta().outbox).toEqual({});
+    expect(meta().failed).toEqual([{ c: "items", id: big.id, reason: "too-large" }]);
+    const { syncStatusStore } = await import("./status");
+    expect(syncStatusStore.getState().failed).toHaveLength(1);
+
+    // Trimmed and tried again: it goes up and the failure clears.
+    s().updateItem(big.id, { notes: "short" });
+    await settle();
+    expect(server.rows.has(`h1/items/${big.id}`)).toBe(true);
+    expect(meta().failed).toEqual([]);
+  });
+
+  it("finds a row the database refuses by halving the batch, and sends the rest", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    server.rejectRow = (r) => (r.data as { name?: string } | null)?.name === "Bad";
+    s().addItems(["A", "B", "Bad", "C", "D", "E"].map(draft), "manual");
+    await settle();
+    const names = server.all("h1").map((r) => (r.data as { name?: string } | null)?.name);
+    expect(names).toEqual(expect.arrayContaining(["A", "B", "C", "D", "E"]));
+    expect(names).not.toContain("Bad");
+    expect(meta().outbox).toEqual({});
+    expect(meta().failed).toHaveLength(1);
+    expect(meta().failed[0]).toMatchObject({ c: "items", reason: "rejected" });
+    // Not a network problem: no backoff, no error status.
+    const { syncStatusStore } = await import("./status");
+    expect(syncStatusStore.getState().state).toBe("synced");
+  });
+
+  it("merge: a failed first pull keeps the local-only upload owed until a pull completes", async () => {
+    server.write({ household_id: "h2", collection: "items", id: "theirs", data: remoteItem("theirs", "Their cheese"), deleted: false });
+    s().addItems([draft("My apples")], "manual");
+    server.failPulls = 1;
+    await expect(engine.bind("h2", "Their place", "merge")).rejects.toBeTruthy();
+    expect(meta().pendingMerge).toBe(true);
+    expect(server.all("h2").some((r) => (r.data as { name?: string } | null)?.name === "My apples")).toBe(false);
+
+    // A reload in between must not lose it either.
+    engine.stop();
+    engine = new eng.SyncEngine(fakeClient(server) as never);
+    engine.start();
+    await settle(5000);
+    expect(meta().pendingMerge).toBe(false);
+    expect(s().items.map((i) => i.name).sort()).toEqual(["My apples", "Their cheese"]);
+    expect(server.all("h2").some((r) => (r.data as { name?: string } | null)?.name === "My apples")).toBe(true);
+  });
+
+  it("skips invalid remote records instead of breaking the store", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    server.write({ household_id: "h1", collection: "items", id: "bad", data: { name: 42 }, deleted: false });
+    server.write({ household_id: "h1", collection: "overrides", id: "__proto__", data: { fridgeDays: 1 }, deleted: false });
+    server.write({ household_id: "h1", collection: "items", id: "ok", data: remoteItem("ok", "Bread"), deleted: false });
+    engine.syncNow();
+    await settle();
+    expect(s().items.map((i) => i.id)).toEqual(["ok"]);
+    expect(({} as Record<string, unknown>).fridgeDays).toBeUndefined();
+    expect(meta().cursor).toBe(server.seq);
+  });
+
+  it("flushPending sends what's queued and reports what's left", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Tea")], "manual");
+    expect(await engine.flushPending()).toBe(0);
+    expect(server.all("h1").some((r) => (r.data as { name?: string } | null)?.name === "Tea")).toBe(true);
+    server.failUpserts = 5;
+    s().addItems([draft("Coffee")], "manual");
+    // The item and its "added" event are still queued, and the caller is told so.
+    const left = await engine.flushPending();
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBe(Object.keys(meta().outbox).length);
   });
 });

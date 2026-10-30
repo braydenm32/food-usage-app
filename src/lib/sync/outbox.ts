@@ -33,6 +33,22 @@ export interface OutboxEntry extends Change {
 
 export type Outbox = Record<string, OutboxEntry>;
 
+export type FailReason =
+  /** Bigger than MAX_RECORD_BYTES; never sent. */
+  | "too-large"
+  /** The server refused the row itself (a data or constraint error). */
+  | "rejected";
+
+/** A change taken out of the outbox because it can never go up as it is. */
+export interface FailedChange {
+  c: CollectionName;
+  id: string;
+  reason: FailReason;
+}
+
+/** Largest record (JSON, in bytes) that goes up. Anything bigger is set aside, not retried. */
+export const MAX_RECORD_BYTES = 60_000;
+
 export interface SyncMeta {
   v: 1;
   /** Household this device syncs with; null = not syncing. */
@@ -46,6 +62,13 @@ export interface SyncMeta {
   /** Last rev handed out. */
   rev: number;
   lastSyncedAt: string | null;
+  /** Changes that couldn't sync and won't be retried until the record changes again. */
+  failed: FailedChange[];
+  /**
+   * Joined with "bring the food on this device": the local-only records go up after the first
+   * complete pull. Persisted so a failed first pull (or a closed tab) doesn't lose them.
+   */
+  pendingMerge: boolean;
 }
 
 export const emptyMeta = (): SyncMeta => ({
@@ -57,7 +80,14 @@ export const emptyMeta = (): SyncMeta => ({
   outbox: {},
   rev: 0,
   lastSyncedAt: null,
+  failed: [],
+  pendingMerge: false,
 });
+
+const isFailed = (f: unknown): f is FailedChange => {
+  const x = f as FailedChange | null;
+  return !!x && typeof x.c === "string" && typeof x.id === "string" && (x.reason === "too-large" || x.reason === "rejected");
+};
 
 /** Read persisted meta, tolerating anything malformed. */
 export function parseMeta(raw: string | null): SyncMeta {
@@ -71,6 +101,8 @@ export function parseMeta(raw: string | null): SyncMeta {
       cursor: Number.isFinite(m.cursor) ? Number(m.cursor) : 0,
       rev: Number.isFinite(m.rev) ? Number(m.rev) : 0,
       outbox: m.outbox && typeof m.outbox === "object" ? m.outbox : {},
+      failed: Array.isArray(m.failed) ? m.failed.filter(isFailed) : [],
+      pendingMerge: m.pendingMerge === true,
     };
   } catch {
     return emptyMeta();
@@ -132,7 +164,35 @@ export function ack(meta: SyncMeta, sent: OutboxEntry[]): SyncMeta {
       changed = true;
     }
   }
+  // A record that once failed and has now gone up is fine again.
+  const sentKeys = new Set(sent.map((e) => recordKey(e.c, e.id)));
+  const failed = meta.failed.filter((f) => !sentKeys.has(recordKey(f.c, f.id)));
+  if (failed.length !== meta.failed.length) return { ...meta, outbox, failed };
   return changed ? { ...meta, outbox } : meta;
+}
+
+/**
+ * Take entries out of the outbox and remember them as failed, so one bad record can't block
+ * everything queued behind it. An entry edited again since is left queued (the new version
+ * may be fine).
+ */
+export function quarantine(meta: SyncMeta, entries: OutboxEntry[], reason: FailReason): SyncMeta {
+  if (entries.length === 0) return meta;
+  const outbox = { ...meta.outbox };
+  const failed = new Map(meta.failed.map((f) => [recordKey(f.c, f.id), f]));
+  for (const e of entries) {
+    const k = recordKey(e.c, e.id);
+    if (outbox[k]?.rev !== e.rev) continue;
+    delete outbox[k];
+    failed.set(k, { c: e.c, id: e.id, reason });
+  }
+  return { ...meta, outbox, failed: [...failed.values()] };
+}
+
+/** "Try again": put failed changes back in the outbox (each goes up as whatever it is now). */
+export function requeueFailed(meta: SyncMeta): SyncMeta {
+  const changes = meta.failed.map((f): Change => ({ c: f.c, id: f.id, op: "upsert" }));
+  return { ...enqueue(meta, changes), failed: [] };
 }
 
 export type RecordRow = TablesInsert<"household_records">;
@@ -148,6 +208,33 @@ export function buildRows(entries: OutboxEntry[], state: SyncedState, householdI
       ? { household_id: householdId, collection: e.c, id: e.id, data: null, deleted: true }
       : { household_id: householdId, collection: e.c, id: e.id, data: value as Json, deleted: false };
   });
+}
+
+/** Size of a row's data as sent (UTF-8 bytes of its JSON). */
+export function recordBytes(row: RecordRow): number {
+  return row.data == null ? 0 : new TextEncoder().encode(JSON.stringify(row.data)).length;
+}
+
+export interface PreparedBatch {
+  entries: OutboxEntry[];
+  /** Same order as entries. */
+  rows: RecordRow[];
+  /** Entries whose record is too big to send. */
+  tooLarge: OutboxEntry[];
+}
+
+/** Rows for a batch, with oversized records split off instead of sent. */
+export function prepareBatch(entries: OutboxEntry[], state: SyncedState, householdId: string, maxBytes = MAX_RECORD_BYTES): PreparedBatch {
+  const out: PreparedBatch = { entries: [], rows: [], tooLarge: [] };
+  const rows = buildRows(entries, state, householdId);
+  rows.forEach((row, i) => {
+    if (recordBytes(row) > maxBytes) out.tooLarge.push(entries[i]);
+    else {
+      out.entries.push(entries[i]);
+      out.rows.push(row);
+    }
+  });
+  return out;
 }
 
 export const pendingCount = (meta: SyncMeta) => Object.keys(meta.outbox).length;

@@ -12,7 +12,15 @@ import { hasLocalData } from "@/lib/sync/apply";
 import { explain, joinHousehold, nameFromEmail, peekInvite, type InvitePeek } from "@/lib/sync/household";
 import { useSyncStatus } from "@/lib/sync/status";
 import { AuthPanel } from "@/components/account/auth-panel";
-import { JoinModeChoice, NotConfigured, Notice, SkeletonCards, useAuthReturn, type JoinMode } from "@/components/account/shared";
+import {
+  JoinModeChoice,
+  NotConfigured,
+  Notice,
+  SkeletonCards,
+  unsyncedWarning,
+  useAuthReturn,
+  type JoinMode,
+} from "@/components/account/shared";
 import { Button, Card, Field, Input, PageHeader, buttonClass } from "@/components/ui";
 import { toast } from "@/components/toast";
 
@@ -68,6 +76,8 @@ function InviteDetails({ token }: { token: string }) {
   const [name, setName] = useState(() => nameFromEmail(status.email));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Unsent changes for the current household; joining again means accepting they're lost. */
+  const [unsynced, setUnsynced] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -136,6 +146,15 @@ function InviteDetails({ token }: { token: string }) {
     setBusy(true);
     setError(null);
     try {
+      // Switching household drops anything still queued for the current one: send it first.
+      if (status.householdId && !unsynced) {
+        const left = await engine.flushPending();
+        if (left > 0) {
+          setUnsynced(left);
+          setBusy(false);
+          return;
+        }
+      }
       const hid = await joinHousehold(client, token, name);
       try {
         await engine.bind(hid, householdName, local ? mode : "replace");
@@ -178,9 +197,16 @@ function InviteDetails({ token }: { token: string }) {
           )}
         </Field>
         {local && <JoinModeChoice householdName={householdName} value={mode} onChange={setMode} itemCount={itemCount} />}
+        {unsynced > 0 && (
+          <div role="alert">
+            <Notice tone="warn">
+              {unsyncedWarning(unsynced, status.householdName ?? undefined)}
+            </Notice>
+          </div>
+        )}
         <div className="flex flex-col gap-2 sm:flex-row-reverse sm:justify-start">
           <Button type="submit" disabled={busy}>
-            {busy ? "Joining…" : `Join ${householdName}`}
+            {busy ? "Joining…" : unsynced > 0 ? `Join ${householdName} anyway` : `Join ${householdName}`}
           </Button>
           <Link href="/" className={buttonClass("ghost", "md")}>
             Not now

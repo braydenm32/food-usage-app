@@ -9,7 +9,19 @@
  * - `settings` is per device and never syncs.
  */
 import { DEFAULT_LOCATIONS, DEFAULT_PROFILE, MAX_EVENTS, type LarderState } from "@/lib/store";
-import type { HouseholdProfile, ShelfLifeOverride } from "@/lib/types";
+import type {
+  Aisle,
+  HouseholdProfile,
+  ItemEvent,
+  MealPlanEntry,
+  PantryItem,
+  Recipe,
+  RecipeIngredient,
+  ShelfLifeOverride,
+  ShoppingListItem,
+  StorageLocation,
+  Unit,
+} from "@/lib/types";
 
 export const SYNCED_COLLECTIONS = [
   "items",
@@ -76,25 +88,175 @@ export function emptySynced(): SyncedState {
   };
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
-const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+/* ---------- Validating records from the server ---------- */
+// Anyone in the household can write any row, so everything pulled is checked before it reaches
+// the store. A record missing a required field (or with the wrong type) is skipped; optional
+// fields with the wrong type are dropped. One bad row then costs one record, not the app.
+
+/** Ids that would reach Object.prototype if used as a plain-object key. */
+const UNSAFE_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** An id this device will accept from the server. */
+export const isSafeId = (id: unknown): id is string =>
+  typeof id === "string" && id.length > 0 && id.length <= MAX_ID_LENGTH && !UNSAFE_IDS.has(id);
+
+type Obj = Record<string, unknown>;
+
+const isObj = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isDate = (v: unknown): v is string => isStr(v) && v.length <= 40 && !Number.isNaN(Date.parse(v));
+const oneOf =
+  <T extends string>(...values: T[]) =>
+  (v: unknown): v is T =>
+    (values as unknown[]).includes(v);
+const isWebUrl = (v: unknown): v is string => isStr(v) && /^https?:\/\//i.test(v);
+const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter(isStr) : []);
+
+/** Copy only the fields that pass their check; missing or wrong fields are left out. */
+function pick(data: Obj, checks: Record<string, (v: unknown) => boolean>): Obj {
+  const out: Obj = {};
+  for (const [k, ok] of Object.entries(checks)) if (data[k] !== undefined && ok(data[k])) out[k] = data[k];
+  return out;
+}
+
+const isDateKind = oneOf("use-by", "best-before");
+const isItemSource = oneOf("receipt", "list", "barcode", "manual", "order");
+const isEventType = oneOf("added", "opened", "moved", "used", "binned", "edited", "cooked");
+const isLocationKind = oneOf("pantry", "fridge", "freezer");
+const isRecipeSource = oneOf("ai", "database", "saved", "builtin");
+const isListReason = oneOf("manual", "recipe", "staple", "plan");
+const isDiet = oneOf("vegetarian", "vegan", "pescatarian", "gluten-free", "dairy-free", "low-carb", "halal", "kosher");
+const isDays = (v: unknown) => v === null || (isNum(v) && v >= 0);
+const foodTypeIdOf = (v: unknown) => (isStr(v) ? v : null);
+
+function parseItem(id: string, d: Obj): PantryItem | null {
+  if (!isStr(d.name) || !isStr(d.locationId) || !isNum(d.quantity) || !isStr(d.unit)) return null;
+  if (!isDate(d.addedAt) || !isDateKind(d.dateKind) || !isItemSource(d.source)) return null;
+  return {
+    ...pick(d, {
+      price: isNum,
+      printedDate: isDate,
+      openedAt: isDate,
+      frozenAt: isDate,
+      thawedAt: isDate,
+      expiredWhenFrozen: (v) => typeof v === "boolean",
+      barcode: isStr,
+      notes: isStr,
+    }),
+    id,
+    name: d.name,
+    foodTypeId: foodTypeIdOf(d.foodTypeId),
+    emoji: isStr(d.emoji) ? d.emoji : "🍽️",
+    locationId: d.locationId,
+    quantity: d.quantity,
+    initialQuantity: isNum(d.initialQuantity) ? d.initialQuantity : d.quantity,
+    unit: d.unit as Unit,
+    addedAt: d.addedAt,
+    dateKind: d.dateKind,
+    source: d.source,
+  };
+}
+
+function parseEvent(id: string, d: Obj): ItemEvent | null {
+  if (!isStr(d.itemId) || !isStr(d.itemName) || !isEventType(d.type) || !isDate(d.at)) return null;
+  return {
+    ...pick(d, { quantity: isNum, unit: isStr, value: isNum, detail: isStr, locationId: isStr }),
+    id,
+    itemId: d.itemId,
+    itemName: d.itemName,
+    foodTypeId: foodTypeIdOf(d.foodTypeId),
+    type: d.type,
+    at: d.at,
+  };
+}
+
+function parseLocation(id: string, d: Obj): StorageLocation | null {
+  if (!isStr(d.name) || !isLocationKind(d.kind)) return null;
+  return { ...pick(d, { emoji: isStr }), id, name: d.name, kind: d.kind };
+}
+
+function parseOverride(id: string, d: Obj): ShelfLifeOverride {
+  return { ...pick(d, { pantryDays: isDays, fridgeDays: isDays, freezerDays: isDays, openedDays: isDays }), foodTypeId: id };
+}
+
+function parseProfile(d: Obj): HouseholdProfile {
+  return {
+    householdName: isStr(d.householdName) ? d.householdName : DEFAULT_PROFILE.householdName,
+    people: isNum(d.people) && d.people >= 1 ? Math.round(d.people) : DEFAULT_PROFILE.people,
+    diets: Array.isArray(d.diets) ? d.diets.filter(isDiet) : [],
+    allergies: strArr(d.allergies),
+    likes: strArr(d.likes),
+    dislikes: strArr(d.dislikes),
+  };
+}
+
+function parseIngredient(v: unknown): RecipeIngredient | null {
+  if (!isObj(v) || !isStr(v.name)) return null;
+  return {
+    ...pick(v, { quantity: isNum, unit: isStr, foodTypeId: (x) => x === null || isStr(x), optional: (x) => typeof x === "boolean" }),
+    name: v.name,
+  };
+}
+
+function parseRecipe(id: string, d: Obj): Recipe | null {
+  if (!isStr(d.title) || !isRecipeSource(d.source) || !isNum(d.servings)) return null;
+  if (!Array.isArray(d.ingredients) || !Array.isArray(d.steps)) return null;
+  return {
+    ...pick(d, { sourceUrl: isWebUrl, image: isWebUrl, minutes: isNum, summary: isStr, savedAt: isDate }),
+    id,
+    title: d.title,
+    source: d.source,
+    servings: d.servings,
+    ingredients: d.ingredients.map(parseIngredient).filter((x): x is RecipeIngredient => x !== null),
+    steps: strArr(d.steps),
+    tags: strArr(d.tags),
+  };
+}
+
+function parseListItem(id: string, d: Obj): ShoppingListItem | null {
+  if (!isStr(d.name) || typeof d.checked !== "boolean" || !isDate(d.addedAt)) return null;
+  return {
+    ...pick(d, { quantity: isNum, unit: isStr, reason: isListReason, recipeId: isStr }),
+    id,
+    name: d.name,
+    foodTypeId: foodTypeIdOf(d.foodTypeId),
+    // The list groups unknown aisles under "Other".
+    aisle: (isStr(d.aisle) ? d.aisle : "Other") as Aisle,
+    checked: d.checked,
+    addedAt: d.addedAt,
+  };
+}
+
+function parseMealPlan(id: string, d: Obj): MealPlanEntry | null {
+  if (!isDate(d.date) || !isStr(d.recipeId)) return null;
+  return { ...pick(d, { servings: isNum }), id, date: d.date, recipeId: d.recipeId };
+}
 
 /** Validate and tidy a record from the server. Returns null for anything unusable. */
 export function parseIncoming(collection: CollectionName, id: string, data: unknown): unknown | null {
-  if (!isObj(data)) return null;
-  if (collection === "profile") {
-    return {
-      ...DEFAULT_PROFILE,
-      ...data,
-      diets: strArr(data.diets),
-      allergies: strArr(data.allergies),
-      likes: strArr(data.likes),
-      dislikes: strArr(data.dislikes),
-    } as HouseholdProfile;
+  if (!isSafeId(id) || !isObj(data)) return null;
+  switch (collection) {
+    case "items":
+      return parseItem(id, data);
+    case "events":
+      return parseEvent(id, data);
+    case "locations":
+      return parseLocation(id, data);
+    case "overrides":
+      return parseOverride(id, data);
+    case "profile":
+      // One profile per household; any other id is junk.
+      return id === PROFILE_ID ? parseProfile(data) : null;
+    case "savedRecipes":
+      return parseRecipe(id, data);
+    case "shoppingList":
+      return parseListItem(id, data);
+    case "mealPlan":
+      return parseMealPlan(id, data);
+    default:
+      return null;
   }
-  if (collection === "overrides") return { ...data, foodTypeId: id } as ShelfLifeOverride;
-  // Array records: the row id is the record id.
-  return { ...data, id };
 }
 
 /** Put incoming records in a sensible order after a remote apply. */
@@ -134,8 +296,10 @@ export function applyToCollection(state: SyncedState, collection: CollectionName
     return { profile: (last.value as HouseholdProfile | null) ?? DEFAULT_PROFILE };
   }
   if (collection === "overrides") {
-    const next = { ...state.overrides };
+    // No prototype: a key can never reach Object.prototype (ids are checked as well).
+    const next: Record<string, ShelfLifeOverride> = Object.assign(Object.create(null), state.overrides);
     for (const c of changes) {
+      if (!isSafeId(c.id)) continue;
       if (c.value === null) delete next[c.id];
       else next[c.id] = c.value as ShelfLifeOverride;
     }

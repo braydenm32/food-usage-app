@@ -14,6 +14,7 @@ import {
   emptySynced,
   getRecord,
   isCollection,
+  isSafeId,
   parseIncoming,
   recordKey,
   sameRecord,
@@ -29,6 +30,35 @@ export interface RemoteRow {
   data: unknown;
   deleted: boolean;
   seq: number;
+}
+
+/** One page from the `pull_household_records` RPC. */
+export interface PullPage {
+  rows: RemoteRow[];
+  /** Safe to resume after: never past a row whose write might still commit. */
+  cursor: number;
+  /** More settled rows may follow straight away. */
+  more: boolean;
+  /** Rows the server sent (before dropping malformed ones) and the highest seq among them. */
+  count: number;
+  lastSeq: number;
+}
+
+/** Read the RPC's JSON defensively; malformed rows are dropped, a malformed page is an error. */
+export function parsePullPage(data: unknown): PullPage {
+  const d = data as { rows?: unknown; cursor?: unknown; more?: unknown } | null;
+  if (!d || typeof d !== "object" || !Array.isArray(d.rows)) throw new Error("Unexpected reply from the sync server");
+  const rows: RemoteRow[] = [];
+  let lastSeq = 0;
+  for (const r of d.rows as Array<Partial<RemoteRow> | null>) {
+    const seq = Number(r?.seq);
+    if (!r || !Number.isFinite(seq)) continue;
+    lastSeq = Math.max(lastSeq, seq);
+    if (typeof r.collection !== "string" || typeof r.id !== "string") continue;
+    rows.push({ collection: r.collection, id: r.id, data: r.data ?? null, deleted: r.deleted === true, seq });
+  }
+  const cursor = Number(d.cursor);
+  return { rows, cursor: Number.isFinite(cursor) ? cursor : 0, more: d.more === true, count: d.rows.length, lastSeq };
 }
 
 export interface ApplyResult {
@@ -48,7 +78,7 @@ export function applyRemote(state: SyncedState, rows: RemoteRow[], outbox: Outbo
   let applied = 0;
   for (const row of rows) {
     if (row.seq > next) next = row.seq;
-    if (!isCollection(row.collection)) continue;
+    if (!isCollection(row.collection) || !isSafeId(row.id)) continue;
     const c = row.collection;
     const key = recordKey(c, row.id);
     seen.add(key);

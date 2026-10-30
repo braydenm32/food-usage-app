@@ -21,7 +21,7 @@ export type Database = {
       household_invites: {
         Row: {
           created_at: string
-          created_by: string
+          created_by: string | null
           expires_at: string
           household_id: string
           revoked: boolean
@@ -29,7 +29,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          created_by: string
+          created_by?: string | null
           expires_at?: string
           household_id: string
           revoked?: boolean
@@ -37,7 +37,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          created_by?: string
+          created_by?: string | null
           expires_at?: string
           household_id?: string
           revoked?: boolean
@@ -129,19 +129,19 @@ export type Database = {
       households: {
         Row: {
           created_at: string
-          created_by: string
+          created_by: string | null
           id: string
           name: string
         }
         Insert: {
           created_at?: string
-          created_by: string
+          created_by?: string | null
           id?: string
           name?: string
         }
         Update: {
           created_at?: string
-          created_by?: string
+          created_by?: string | null
           id?: string
           name?: string
         }
@@ -165,9 +165,13 @@ export type Database = {
         Args: { invite_token: string }
         Returns: {
           expired: boolean
-          household_id: string
+          household_id: string | null
           household_name: string
         }[]
+      }
+      pull_household_records: {
+        Args: { after_seq: number; hid: string; max_rows?: number }
+        Returns: Json
       }
     }
     Enums: {

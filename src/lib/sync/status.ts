@@ -1,6 +1,7 @@
 "use client";
 
 import { createStore, useStore } from "zustand";
+import type { FailedChange } from "@/lib/sync/outbox";
 
 export type SyncState =
   /** This build has no Supabase project configured. */
@@ -25,6 +26,8 @@ export interface SyncStatus {
   email: string | null;
   householdId: string | null;
   householdName: string | null;
+  /** Changes set aside because the server can never take them (too large, or refused). */
+  failed: FailedChange[];
   /** One-off message for the account screen, e.g. "You were removed from the household". */
   notice: string | null;
 }
@@ -39,6 +42,7 @@ export const syncStatusStore = createStore<SyncStatus>(() => ({
   email: null,
   householdId: null,
   householdName: null,
+  failed: [],
   notice: null,
 }));
 
@@ -47,6 +51,14 @@ export function useSyncStatus(): SyncStatus;
 export function useSyncStatus<T>(select: (s: SyncStatus) => T): T;
 export function useSyncStatus<T>(select?: (s: SyncStatus) => T) {
   return useStore(syncStatusStore, select ?? ((s: SyncStatus) => s as unknown as T));
+}
+
+/** "3 changes couldn't sync (too large)", or null when nothing failed. */
+export function describeFailed(failed: FailedChange[]): string | null {
+  if (failed.length === 0) return null;
+  const tooLarge = failed.filter((f) => f.reason === "too-large").length;
+  const why = tooLarge === failed.length ? "too large" : tooLarge === 0 ? "refused by the server" : `${tooLarge} too large`;
+  return `${failed.length} change${failed.length === 1 ? "" : "s"} couldn't sync (${why})`;
 }
 
 /** Short, honest words for a status, e.g. for a settings row. */

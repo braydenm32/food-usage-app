@@ -18,7 +18,8 @@ export interface Member {
 }
 
 export interface InvitePeek {
-  householdId: string;
+  /** Only given for an invite that can still be used. */
+  householdId: string | null;
   householdName: string;
   expired: boolean;
 }
@@ -36,6 +37,13 @@ export function explain(e: unknown, fallback = "Something went wrong. Try again.
   }
   if (/expired or is not valid/i.test(msg)) return "This invite link has expired or isn't valid. Ask for a new one.";
   if (/not a member/i.test(msg)) return "You're not in that household any more.";
+  if (/sign in with an email/i.test(msg)) return "Sign in with your email address to start or join a household.";
+  if (/at most 5 households/i.test(msg)) return "You can be in up to 5 households. Leave one before starting or joining another.";
+  if (/household is full/i.test(msg)) return "That household is full. A household can have up to 20 people.";
+  if (/too many open invites/i.test(msg)) {
+    return `This household has too many invite links waiting to be used. Older ones stop working after ${INVITE_DAYS} days; try again then.`;
+  }
+  if (/storage limit/i.test(msg)) return "This household has reached its storage limit, so new changes can't sync.";
   if (/not signed in|jwt/i.test(msg)) return "Your sign-in has expired. Sign in again.";
   return msg ? `${fallback} (${msg})` : fallback;
 }
@@ -99,7 +107,9 @@ export async function peekInvite(client: LarderClient, token: string): Promise<I
   const { data, error } = await client.rpc("peek_household_invite", { invite_token: token });
   if (error) throw error;
   const row = data?.[0];
-  return row ? { householdId: row.household_id, householdName: row.household_name, expired: row.expired } : null;
+  if (!row) return null;
+  // The server leaves the household id out for an expired or cancelled invite.
+  return { householdId: row.household_id, householdName: row.household_name, expired: row.expired || !row.household_id };
 }
 
 export async function joinHousehold(client: LarderClient, token: string, memberName: string): Promise<string> {
@@ -121,6 +131,10 @@ export async function setDisplayName(client: LarderClient, householdId: string, 
   if (error) throw error;
 }
 
+/**
+ * Remove this account from a household. The database tidies up after: the last person out
+ * deletes the household, and if the only owner leaves, the longest-standing member takes over.
+ */
 export async function leaveHousehold(client: LarderClient, householdId: string) {
   const uid = await userId(client);
   const { error } = await client.from("household_members").delete().eq("household_id", householdId).eq("user_id", uid);
