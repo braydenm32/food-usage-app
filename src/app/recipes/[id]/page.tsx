@@ -3,15 +3,17 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, ExternalLink, ShoppingBasket, Users, ChefHat } from "lucide-react";
+import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, ExternalLink, Pencil, Timer, ShoppingBasket, Users, ChefHat } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, SectionTitle, Sheet, Stepper, buttonClass, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
 import { toast } from "@/components/toast";
 import { CookSheet } from "@/components/recipes/cook-sheet";
 import { CookMode } from "@/components/recipes/cook-mode";
+import { EditRecipeSheet } from "@/components/recipes/edit-recipe-sheet";
+import { useCookTimers } from "@/lib/cook-timers";
 import { getBuiltinRecipe } from "@/lib/recipes/builtin";
 import { readCachedRecipe, cacheRecipes } from "@/lib/recipes/cache";
-import { formatAmount, scaleIngredient } from "@/lib/recipes/quantity";
+import { formatAmount, scaleIngredient, tbspOf } from "@/lib/recipes/quantity";
 import { allergenHits, analyseRecipe, dislikeHits, exclusionReason, isStaple, stockCount } from "@/lib/recipes/suggest";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { toLocalISODate } from "@/lib/shelf-life/engine";
@@ -96,13 +98,26 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const profile = useLarder((s) => s.profile);
   const defaultPeople = profile.people;
   const router = useRouter();
-  const planParam = useSearchParams().get("plan");
+  const search = useSearchParams();
+  const planParam = search.get("plan");
+  const cookParam = search.get("cook") === "1";
+  const timerCount = useCookTimers((s) => s.timers.filter((t) => t.recipeId === recipe.id).length);
+  const [editOpen, setEditOpen] = useState(false);
 
   const isSaved = savedRecipes.some((r) => r.id === recipe.id);
   // Scale to the household by default; the recipe's own serving count is shown beside it.
   const [servings, setServings] = useState(() => Math.max(1, defaultPeople));
   const [cookOpen, setCookOpen] = useState(false);
-  const [cookModeOpen, setCookModeOpen] = useState(false);
+  // Cook mode is in the URL (?cook=1) so a timer notification or the timer pill can reopen it.
+  const cookModeOpen = cookParam && recipe.steps.length > 0;
+  const setCookModeOpen = (on: boolean) => {
+    const params = new URLSearchParams(search.toString());
+    if (on) params.set("cook", "1");
+    else params.delete("cook");
+    const q = params.toString();
+    router.replace(`/recipes/${encodeURIComponent(recipe.id)}${q ? `?${q}` : ""}`, { scroll: false });
+  };
+  const editable = isSavedRecipe(recipe, savedRecipes);
   const planPrefill = planParam && /^\d{4}-\d{2}-\d{2}$/.test(planParam) ? planParam : null;
   const [planOpen, setPlanOpen] = useState(false);
   const [planDate, setPlanDate] = useState(() => planPrefill ?? toLocalISODate(new Date()));
@@ -116,7 +131,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const useByIngredient = new Map(analysis.uses.map((u) => [u.ingredient, u]));
   const missingNames = new Set(analysis.missing.map((m) => m.name));
   const stock = stockCount(analysis);
-  const usesTbsp = recipe.tbspMl === 15 && recipe.ingredients.some((i) => i.unit === "tbsp");
+  const usesTbsp = tbspOf(recipe) === 15 && recipe.ingredients.some((i) => i.unit === "tbsp");
 
   function addMissing() {
     const entries = analysis.missing.map((m) => {
@@ -193,7 +208,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
         <div className="mt-6 flex flex-wrap gap-2">
           {recipe.steps.length > 0 && (
             <Button size="lg" onClick={() => setCookModeOpen(true)} className="w-full sm:w-auto">
-              <CookingPot size={20} aria-hidden /> Start cooking
+              {timerCount > 0 ? <Timer size={20} aria-hidden /> : <CookingPot size={20} aria-hidden />} {timerCount > 0 ? "Back to cooking" : "Start cooking"}
             </Button>
           )}
           <Button size="lg" variant={recipe.steps.length > 0 ? "secondary" : "primary"} onClick={() => setCookOpen(true)} className={recipe.steps.length > 0 ? "" : "w-full sm:w-auto"}>
@@ -206,7 +221,13 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
             onClick={() => {
               if (isSaved) {
                 unsaveRecipe(recipe.id);
-                toast("Removed from saved recipes");
+                // Imported recipes only exist in your saved list, so removing one deletes it: offer Undo and leave the page.
+                if (recipe.id.startsWith("imp-")) {
+                  router.push("/recipes");
+                  toast(`Deleted ${recipe.title}`, { action: { label: "Undo", onClick: () => saveRecipe(recipe) } });
+                } else {
+                  toast("Removed from saved recipes", { action: { label: "Undo", onClick: () => saveRecipe(recipe) } });
+                }
               } else {
                 saveRecipe(recipe);
                 toast("Saved to your recipes");
@@ -215,6 +236,11 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           >
             {isSaved ? <BookmarkCheck size={20} aria-hidden /> : <Bookmark size={20} aria-hidden />} {isSaved ? "Saved" : "Save"}
           </Button>
+          {editable && (
+            <Button variant="secondary" size="lg" onClick={() => setEditOpen(true)}>
+              <Pencil size={18} aria-hidden /> Edit
+            </Button>
+          )}
           {plannerOn && (
             <Button variant="secondary" size="lg" onClick={() => setPlanOpen(true)}>
               <CalendarPlus size={20} aria-hidden /> Add to plan
@@ -230,7 +256,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           </SectionTitle>
           {usesTbsp && (
             <p className="mb-3 rounded-2xl bg-surface-2 p-3 text-sm text-ink-2">
-              This recipe uses 15 ml tablespoons. An Australian tablespoon is 20 ml, so use 3 teaspoons for each tablespoon.
+              This recipe&apos;s tablespoon is 15 ml, smaller than an Australian 20 ml one. Measure 3 teaspoons for each tablespoon.
             </p>
           )}
           <Card>
@@ -302,6 +328,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
         </section>
       </div>
 
+      {editable && editOpen && <EditRecipeSheet recipe={recipe} open={editOpen} onClose={() => setEditOpen(false)} />}
       <CookMode open={cookModeOpen} onClose={() => setCookModeOpen(false)} recipe={recipe} factor={factor} onFinish={() => setCookOpen(true)} />
       <CookSheet open={cookOpen} onClose={() => setCookOpen(false)} recipe={recipe} uses={analysis.uses} factor={factor} />
 
@@ -329,6 +356,12 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
       </Sheet>
     </article>
   );
+}
+
+/** Only recipes in your saved list can be edited; built-in and AI ideas are read-only until saved. */
+function isSavedRecipe(recipe: Recipe, saved: Recipe[]): boolean {
+  // Built-in recipes always load from the app's own copy, so edits wouldn't show.
+  return !recipe.id.startsWith("builtin-") && saved.some((r) => r.id === recipe.id);
 }
 
 function capitalise(text: string): string {

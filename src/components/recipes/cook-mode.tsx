@@ -2,60 +2,32 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BellRing, ChefHat, ChevronLeft, ChevronRight, Pause, Play, Plus, Timer, X } from "lucide-react";
-import { Button, IconButton, cx } from "@/components/ui";
+import { Button, IconButton } from "@/components/ui";
+import { askTimerNotifications, secondsLeft, unlockAlarm, useCookTimers } from "@/lib/cook-timers";
 import { formatAmount, scaleIngredient } from "@/lib/recipes/quantity";
 import { findTimers, formatClock } from "@/lib/recipes/timers";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
 
-interface RunningTimer {
-  id: string;
-  label: string;
-  step: number;
-  total: number;
-  /** ms timestamp when it ends, or null while paused. */
-  endsAt: number | null;
-  /** Seconds left, kept while paused. */
-  left: number;
-  rung: boolean;
-}
+const clock = () => Date.now();
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Ingredients a step mentions by name, so the cook doesn't scroll back. */
-function ingredientsForStep(step: string, ingredients: RecipeIngredient[]): RecipeIngredient[] {
-  const s = step.toLowerCase();
+/** Ingredients a step names, matched on whole words ("oil" doesn't match "boil"). */
+export function ingredientsForStep(step: string, ingredients: RecipeIngredient[]): RecipeIngredient[] {
   return ingredients.filter((ing) => {
     const words = ing.name.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2);
     const last = words[words.length - 1];
-    return !!last && (s.includes(ing.name.toLowerCase()) || s.includes(last) || s.includes(last.replace(/e?s$/, "")));
+    if (!last) return false;
+    const stem = last.replace(/(es|s)$/, "");
+    const forms = [...new Set([ing.name.toLowerCase(), last, stem].filter((f) => f.length > 2))];
+    return forms.some((f) => new RegExp(`\\b${escapeRe(f)}(e?s)?\\b`, "i").test(step));
   });
 }
 
-/** Wall-clock time for event handlers. */
-const clock = () => Date.now();
-const timerId = (t: number) => `${t}-${Math.random().toString(36).slice(2)}`;
-
-function beep() {
-  try {
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ctx = new AC();
-    [0, 0.35, 0.7].forEach((t) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.frequency.value = 880;
-      g.gain.setValueAtTime(0.25, ctx.currentTime + t);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.3);
-      o.connect(g).connect(ctx.destination);
-      o.start(ctx.currentTime + t);
-      o.stop(ctx.currentTime + t + 0.3);
-    });
-    setTimeout(() => void ctx.close(), 1500);
-  } catch {
-    // no audio available
-  }
-}
+const endTime = (ms: number) => new Date(ms).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" });
 
 /**
  * Full-screen, step-by-step cooking view. Keeps the screen awake, shows each step's ingredients
- * and offers timers for any times in the step. Timers keep running when cook mode is closed.
+ * and offers timers for the times in a step. Timers are app-wide, so they survive closing this.
  */
 export function CookMode({
   open,
@@ -71,10 +43,25 @@ export function CookMode({
   onFinish: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const headingRef = useRef<HTMLParagraphElement>(null);
   const [step, setStep] = useState(0);
-  const [timers, setTimers] = useState<RunningTimer[]>([]);
-  const [now, setNow] = useState(() => Date.now());
-  const [awake, setAwake] = useState<"on" | "unsupported" | "off">("off");
+  const [awake, setAwake] = useState(false);
+  const [now, setNow] = useState(clock);
+  const all = useCookTimers((s) => s.timers);
+  const start = useCookTimers((s) => s.start);
+  const toggle = useCookTimers((s) => s.toggle);
+  const addMinute = useCookTimers((s) => s.addMinute);
+  const remove = useCookTimers((s) => s.remove);
+  const timers = all.filter((t) => t.recipeId === recipe.id);
+  const ringing = timers.filter((t) => t.rung);
+  const running = timers.filter((t) => !t.rung);
+
+  // Each time cook mode opens: start at step 1, or at the latest step with a running timer.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) setStep(running.length ? Math.max(...running.map((t) => t.step)) : 0);
+  }
 
   useEffect(() => {
     const d = ref.current;
@@ -83,18 +70,23 @@ export function CookMode({
     if (!open && d.open) d.close();
   }, [open]);
 
+  // Move focus to the step text so screen readers read the new step, not the whole page.
+  useEffect(() => {
+    if (open) headingRef.current?.focus();
+  }, [open, step]);
+
   // Keep the screen on while cooking. The lock drops when the tab is hidden, so take it again on return.
   useEffect(() => {
     if (!open) return;
     let lock: WakeLockSentinel | null = null;
     let live = true;
     const take = async () => {
-      if (!("wakeLock" in navigator)) return setAwake("unsupported");
+      if (!("wakeLock" in navigator)) return;
       try {
         lock = await navigator.wakeLock.request("screen");
-        if (live) setAwake("on");
+        if (live) setAwake(true);
       } catch {
-        if (live) setAwake("off");
+        if (live) setAwake(false);
       }
     };
     const onVis = () => document.visibilityState === "visible" && void take();
@@ -107,69 +99,30 @@ export function CookMode({
     };
   }, [open]);
 
-  const anyRunning = timers.some((t) => t.endsAt !== null && !t.rung);
-  const timersRef = useRef(timers);
+  const ticking = open && running.some((t) => t.endsAt !== null);
   useEffect(() => {
-    timersRef.current = timers;
-  }, [timers]);
-  const titleRef = useRef(recipe.title);
-  useEffect(() => {
-    titleRef.current = recipe.title;
-  }, [recipe.title]);
-
-  // Tick while a timer runs, and ring any that have run out.
-  useEffect(() => {
-    if (!anyRunning) return;
-    const id = setInterval(() => {
-      const t = Date.now();
-      setNow(t);
-      const due = timersRef.current.filter((x) => x.endsAt !== null && !x.rung && x.endsAt <= t);
-      if (due.length === 0) return;
-      const ids = new Set(due.map((d) => d.id));
-      setTimers((ts) => ts.map((x) => (ids.has(x.id) ? { ...x, rung: true, left: 0 } : x)));
-      beep();
-      navigator.vibrate?.([300, 150, 300, 150, 300]);
-      if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.visibilityState !== "visible") {
-        try {
-          new Notification("Timer done", { body: `${due[0].label} · step ${due[0].step + 1} of ${titleRef.current}`, tag: "larder-timer" });
-        } catch {
-          // some browsers only allow notifications from the service worker
-        }
-      }
-    }, 500);
+    if (!ticking) return;
+    const id = setInterval(() => setNow(clock()), 500);
     return () => clearInterval(id);
-  }, [anyRunning]);
+  }, [ticking]);
 
   const steps = recipe.steps;
-  const last = steps.length - 1;
-  const current = steps[Math.min(step, last)] ?? "";
+  const last = Math.max(0, steps.length - 1);
+  const at = Math.min(step, last);
+  const current = steps[at] ?? "";
   const found = useMemo(() => findTimers(current), [current]);
   const stepIngredients = useMemo(() => ingredientsForStep(current, recipe.ingredients), [current, recipe.ingredients]);
 
   function startTimer(label: string, seconds: number) {
-    if (typeof Notification !== "undefined" && Notification.permission === "default") void Notification.requestPermission().catch(() => {});
-    const t = clock();
-    const timer: RunningTimer = { id: timerId(t), label, step, total: seconds, endsAt: t + seconds * 1000, left: seconds, rung: false };
-    setNow(t);
-    setTimers((ts) => [...ts, timer]);
-  }
-  function toggle(id: string) {
+    unlockAlarm();
+    askTimerNotifications();
     const n = clock();
-    setTimers((ts) =>
-      ts.map((t) =>
-        t.id !== id || t.rung ? t : t.endsAt === null ? { ...t, endsAt: n + t.left * 1000 } : { ...t, endsAt: null, left: Math.max(0, (t.endsAt - n) / 1000) },
-      ),
-    );
-  }
-  function addMinute(id: string) {
-    const n = clock();
-    setTimers((ts) =>
-      ts.map((t) => (t.id !== id ? t : t.rung ? { ...t, rung: false, endsAt: n + 60_000, left: 60 } : t.endsAt === null ? { ...t, left: t.left + 60 } : { ...t, endsAt: t.endsAt + 60_000 })),
-    );
     setNow(n);
+    start({ label, recipeId: recipe.id, recipeTitle: recipe.title, step: at, total: seconds }, n);
   }
-  const remove = (id: string) => setTimers((ts) => ts.filter((t) => t.id !== id));
-  const leftOf = (t: RunningTimer) => (t.rung ? 0 : t.endsAt === null ? t.left : Math.max(0, (t.endsAt - now) / 1000));
+
+  const go = (to: number) => setStep(Math.max(0, Math.min(last, to)));
+  const touch = useRef<{ x: number; y: number } | null>(null);
 
   return (
     <dialog
@@ -188,28 +141,54 @@ export function CookMode({
             <div className="min-w-0">
               <p className="truncate text-sm text-ink-2">{recipe.title}</p>
               <p className="font-semibold text-ink">
-                Step {Math.min(step, last) + 1} of {steps.length}
-                {awake === "on" && <span className="ml-2 text-xs font-normal text-ink-3">Screen stays on</span>}
+                Step {at + 1} of {steps.length}
+                {awake && <span className="ml-2 text-xs font-normal text-ink-3">Screen stays on</span>}
               </p>
             </div>
-            <IconButton label="Close cook mode" onClick={onClose}>
+            <IconButton label="Close cook mode (timers keep running)" onClick={onClose}>
               <X size={22} />
             </IconButton>
           </header>
           <div className="mx-4 mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-            <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${((Math.min(step, last) + 1) / Math.max(1, steps.length)) * 100}%` }} />
+            <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${((at + 1) / Math.max(1, steps.length)) * 100}%` }} />
           </div>
 
-          <main className="flex-1 overflow-y-auto px-5 py-6 lg:mx-auto lg:w-full lg:max-w-3xl">
-            <p className="font-display text-[1.65rem] leading-snug text-ink lg:text-4xl" aria-live="polite">
+          {ringing.length > 0 && (
+            <div role="alert" className="mx-4 mt-3 flex items-center gap-2 rounded-2xl bg-spoiled py-2 pl-4 pr-2 text-on-status">
+              <BellRing size={24} className="shrink-0 motion-safe:animate-pulse" aria-hidden />
+              <p className="min-w-0 flex-1 font-semibold">
+                {ringing[0].label} is up <span className="font-normal opacity-90">· step {ringing[0].step + 1}</span>
+              </p>
+              <button type="button" onClick={() => addMinute(ringing[0].id, clock())} className="min-h-11 shrink-0 rounded-full px-3 text-sm font-semibold hover:underline">
+                +1 min
+              </button>
+              <button type="button" onClick={() => remove(ringing[0].id)} className="min-h-11 shrink-0 rounded-full bg-on-status px-5 text-base font-bold text-spoiled">
+                Stop
+              </button>
+            </div>
+          )}
+
+          <main
+            className="flex-1 overflow-y-auto px-5 py-6 lg:mx-auto lg:w-full lg:max-w-3xl"
+            onTouchStart={(e) => (touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
+            onTouchEnd={(e) => {
+              const t0 = touch.current;
+              touch.current = null;
+              if (!t0) return;
+              const dx = e.changedTouches[0].clientX - t0.x;
+              const dy = e.changedTouches[0].clientY - t0.y;
+              if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(at + (dx < 0 ? 1 : -1));
+            }}
+          >
+            <p ref={headingRef} tabIndex={-1} className="font-display text-[1.65rem] leading-snug text-ink outline-none lg:text-4xl">
               {current}
             </p>
 
             {found.length > 0 && (
               <div className="mt-5 flex flex-wrap gap-2">
                 {found.map((f) => (
-                  <Button key={f.label} variant="secondary" onClick={() => startTimer(f.label, f.seconds)}>
-                    <Timer size={18} aria-hidden /> Start {f.label} timer
+                  <Button key={f.label} variant="secondary" size="lg" onClick={() => startTimer(f.label, f.seconds)}>
+                    <Timer size={20} aria-hidden /> Start {f.label} timer
                   </Button>
                 ))}
               </div>
@@ -233,46 +212,40 @@ export function CookMode({
             )}
           </main>
 
-          {timers.length > 0 && (
-            <ul className="flex gap-2 overflow-x-auto px-4 pb-2" aria-label="Timers">
-              {timers.map((t) => {
-                const left = leftOf(t);
-                return (
-                  <li
-                    key={t.id}
-                    className={cx(
-                      "flex shrink-0 items-center gap-1 rounded-2xl border py-1 pl-3 pr-1",
-                      t.rung ? "animate-pulse border-spoiled bg-spoiled-soft" : "border-line bg-surface",
-                    )}
-                  >
-                    {t.rung ? <BellRing size={18} className="text-spoiled" aria-hidden /> : <Timer size={16} className="text-ink-3" aria-hidden />}
-                    <span className="min-w-[4.5rem] font-mono text-lg tabular-nums" role="timer" aria-label={`${t.label} timer, step ${t.step + 1}`}>
-                      {t.rung ? "Done" : formatClock(left)}
+          {running.length > 0 && (
+            <ul className="space-y-2 px-4 pb-2" aria-label="Timers">
+              {running.map((t) => (
+                <li key={t.id} className="flex items-center gap-2 rounded-2xl border border-line bg-surface py-1 pl-4 pr-1">
+                  <Timer size={18} className="shrink-0 text-ink-3" aria-hidden />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="font-mono text-2xl leading-tight tabular-nums" role="timer" aria-label={`${t.label} timer, step ${t.step + 1}`}>
+                      {formatClock(secondsLeft(t, now))}
                     </span>
-                    <span className="mr-1 text-xs text-ink-3">step {t.step + 1}</span>
-                    {!t.rung && (
-                      <IconButton label={t.endsAt === null ? "Resume timer" : "Pause timer"} onClick={() => toggle(t.id)}>
-                        {t.endsAt === null ? <Play size={18} /> : <Pause size={18} />}
-                      </IconButton>
-                    )}
-                    <IconButton label="Add a minute" onClick={() => addMinute(t.id)}>
-                      <Plus size={18} />
-                    </IconButton>
-                    <IconButton label="Dismiss timer" onClick={() => remove(t.id)}>
-                      <X size={18} />
-                    </IconButton>
-                  </li>
-                );
-              })}
+                    <span className="truncate text-xs text-ink-2">
+                      Step {t.step + 1}
+                      {t.endsAt !== null ? ` · rings ${endTime(t.endsAt)}` : " · paused"}
+                    </span>
+                  </span>
+                  <IconButton label={t.endsAt === null ? "Resume timer" : "Pause timer"} onClick={() => toggle(t.id, clock())}>
+                    {t.endsAt === null ? <Play size={20} /> : <Pause size={20} />}
+                  </IconButton>
+                  <IconButton label="Add a minute" onClick={() => addMinute(t.id, clock())}>
+                    <Plus size={20} />
+                  </IconButton>
+                  <IconButton label="Cancel timer" onClick={() => remove(t.id)}>
+                    <X size={20} />
+                  </IconButton>
+                </li>
+              ))}
             </ul>
           )}
 
           <footer className="flex gap-2 border-t border-line px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
-            <Button variant="secondary" size="lg" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0} aria-label="Previous step">
+            <Button variant="secondary" size="lg" onClick={() => go(at - 1)} disabled={at === 0} aria-label="Previous step">
               <ChevronLeft size={22} aria-hidden />
             </Button>
-            {step < last ? (
-              <Button size="lg" className="flex-1" onClick={() => setStep((s) => Math.min(last, s + 1))}>
+            {at < last ? (
+              <Button size="lg" className="flex-1" onClick={() => go(at + 1)}>
                 Next step <ChevronRight size={22} aria-hidden />
               </Button>
             ) : (
@@ -281,11 +254,10 @@ export function CookMode({
                 className="flex-1"
                 onClick={() => {
                   onClose();
-                  setStep(0);
                   onFinish();
                 }}
               >
-                <ChefHat size={20} aria-hidden /> Done, update my larder
+                <ChefHat size={20} aria-hidden /> Finish and update larder
               </Button>
             )}
           </footer>

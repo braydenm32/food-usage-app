@@ -87,3 +87,8 @@ function stepRound(n: number, unit: Unit): number {
   if (unit === "g" || unit === "ml") return Math.round(n / 5) * 5 || n;
   return Math.round(n * 100) / 100;
 }
+
+/** Tablespoon size for a recipe. Older saves have none: library (TheMealDB) recipes are UK/US 15 ml; ours are Australian 20 ml. */
+export function tbspOf(recipe: { tbspMl?: 15 | 20; source: string }): 15 | 20 {
+  return recipe.tbspMl ?? (recipe.source === "database" ? 15 : 20);
+}

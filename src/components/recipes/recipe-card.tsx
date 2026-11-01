@@ -71,7 +71,7 @@ export function RecipeCard({
                 ? uses.length > 0
                   ? "You have everything"
                   : "Just staples needed"
-                : `You have ${stock.have} of ${stock.total} · need ${missing.slice(0, 2).map((m) => m.name.toLowerCase()).join(", ")}${missing.length > 2 ? "…" : ""}`}
+                : `${stock.total > 0 ? `You have ${stock.have} of ${stock.total} · ` : ""}need ${missing.slice(0, 2).map((m) => m.name.toLowerCase()).join(", ")}${missing.length > 2 ? "…" : ""}`}
             </p>
           )}
           {planLabel && onPlan && (

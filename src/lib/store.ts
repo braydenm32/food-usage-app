@@ -205,6 +205,8 @@ export interface LarderState {
 
   saveRecipe: (r: Recipe) => void;
   unsaveRecipe: (id: string) => void;
+  /** Edit a saved recipe in place (title, servings, ingredients, steps…). */
+  updateSavedRecipe: (id: string, patch: Partial<Recipe>) => void;
 
   addToList: (entries: Array<Omit<ShoppingListItem, "id" | "checked" | "addedAt" | "aisle"> & { aisle?: Aisle }>) => void;
   toggleListItem: (id: string) => void;
@@ -622,6 +624,8 @@ export const useLarder = create<LarderState>()(
               : { savedRecipes: [{ ...r, savedAt: nowISO() }, ...s.savedRecipes] },
           ),
         unsaveRecipe: (id) => set((s) => ({ savedRecipes: s.savedRecipes.filter((r) => r.id !== id) })),
+        updateSavedRecipe: (id, patch) =>
+          set((s) => ({ savedRecipes: s.savedRecipes.map((r) => (r.id === id ? { ...r, ...patch, id: r.id, savedAt: r.savedAt } : r)) })),
 
         addToList: (entries) =>
           set((s) => {

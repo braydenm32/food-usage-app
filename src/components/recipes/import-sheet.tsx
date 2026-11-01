@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, Link2, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Camera, CircleAlert, Link2, Loader2 } from "lucide-react";
 import { Button, Field, Input, Segmented, Sheet } from "@/components/ui";
 import { toast } from "@/components/toast";
+import { downscaleImage } from "@/components/add/image";
 import { formatAmount } from "@/lib/recipes/quantity";
 import { useLarder } from "@/lib/store";
 import type { Recipe } from "@/lib/types";
@@ -12,15 +14,24 @@ import type { Recipe } from "@/lib/types";
 type Mode = "link" | "photo";
 type State = { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string } | { kind: "done"; recipe: Recipe; method: string };
 
-/** Save a recipe from a web link or a photo. Shows a preview first so nothing lands unseen. */
-export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onClose: () => void; initialUrl?: string }) {
+/** Lines we probably misread, so the preview can flag them before saving. */
+const looksOff = (name: string) => /^[(/x×\d]/i.test(name) || name.length < 2;
+
+/**
+ * Save a recipe from a web link or a photo. Shows a preview first so nothing lands unseen.
+ * `onClose(saved)` tells the page whether a recipe was saved (and navigated to).
+ */
+export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onClose: (saved: boolean) => void; initialUrl?: string }) {
   const [mode, setMode] = useState<Mode>("link");
   const [url, setUrl] = useState(initialUrl ?? "");
   const [state, setState] = useState<State>({ kind: "idle" });
   const [title, setTitle] = useState("");
+  const [tbsp, setTbsp] = useState<"20" | "15">("20");
   const [aiReady, setAiReady] = useState<boolean | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const saveRecipe = useLarder((s) => s.saveRecipe);
+  const saved = useLarder((s) => s.savedRecipes);
   const router = useRouter();
 
   useEffect(() => {
@@ -31,62 +42,90 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
       .catch(() => setAiReady(false));
   }, [open, aiReady]);
 
-  const [prevInitial, setPrevInitial] = useState(initialUrl);
-  if (prevInitial !== initialUrl) {
-    setPrevInitial(initialUrl);
-    if (initialUrl) setUrl(initialUrl);
-  }
-
-  function reset() {
-    setState({ kind: "idle" });
-    setTitle("");
-  }
-
-  async function run(request: Promise<Response>) {
+  async function run(make: (signal: AbortSignal) => Promise<Response>) {
+    abortRef.current?.abort();
+    const ctl = new AbortController();
+    abortRef.current = ctl;
     setState({ kind: "loading" });
     try {
-      const res = await request;
+      const res = await make(ctl.signal);
       const d = (await res.json()) as { recipe?: Recipe; method?: string; message?: string };
+      if (ctl.signal.aborted) return;
       if (!res.ok || !d.recipe) throw new Error(d.message || "Couldn't import that recipe.");
       setTitle(d.recipe.title);
+      setTbsp(d.recipe.tbspMl === 15 ? "15" : "20");
       setState({ kind: "done", recipe: d.recipe, method: d.method ?? "" });
     } catch (e) {
+      if (ctl.signal.aborted) return;
       setState({ kind: "error", message: navigator.onLine === false ? "You're offline. Connect and try again." : (e as Error).message });
     }
   }
 
-  function importLink() {
-    if (!url.trim()) return;
-    void run(fetch("/api/recipes/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: url.trim() }) }));
+  function importLink(link = url) {
+    const u = link.trim();
+    if (!u) return;
+    void run((signal) => fetch("/api/recipes/import", { method: "POST", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ url: u }) }));
   }
 
-  function importPhoto(file: File | undefined) {
+  // A link shared to Larder from another app: switch to Link and start straight away.
+  const [prevInitial, setPrevInitial] = useState<string | undefined>(undefined);
+  if (open && initialUrl && prevInitial !== initialUrl) {
+    setPrevInitial(initialUrl);
+    setMode("link");
+    setUrl(initialUrl);
+  }
+  const startedFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!open || !initialUrl || startedFor.current === initialUrl) return;
+    startedFor.current = initialUrl;
+    // Deferred so the state change happens in a callback, not during the effect body.
+    const id = setTimeout(() => importLink(initialUrl), 0);
+    return () => clearTimeout(id);
+    // Only when a new shared link arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialUrl]);
+
+  async function importPhoto(file: File | undefined) {
     if (!file) return;
+    let blob: Blob = file;
+    try {
+      blob = await downscaleImage(file);
+    } catch {
+      // Couldn't shrink it here (unusual format): send the original and let the server check it.
+    }
     const form = new FormData();
-    form.append("image", file);
-    void run(fetch("/api/recipes/import", { method: "POST", body: form }));
+    form.append("image", blob, "recipe.jpg");
+    void run((signal) => fetch("/api/recipes/import", { method: "POST", signal, body: form }));
   }
 
-  function save() {
-    if (state.kind !== "done") return;
-    const recipe = { ...state.recipe, title: title.trim() || state.recipe.title };
-    saveRecipe(recipe);
-    toast("Saved to your recipes");
-    close();
-    router.push(`/recipes/${encodeURIComponent(recipe.id)}`);
+  function reset() {
+    abortRef.current?.abort();
+    setState({ kind: "idle" });
+    setTitle("");
   }
 
-  function close() {
+  function close(savedIt = false) {
     reset();
-    onClose();
+    onClose(savedIt);
   }
 
   const preview = state.kind === "done" ? state.recipe : null;
+  const duplicate = preview?.sourceUrl ? saved.find((r) => r.sourceUrl === preview.sourceUrl) : undefined;
+  const flagged = preview ? preview.ingredients.filter((i) => looksOff(i.name)).length : 0;
+
+  function save() {
+    if (!preview) return;
+    const recipe: Recipe = { ...preview, title: title.trim() || preview.title, tbspMl: tbsp === "15" ? 15 : 20 };
+    saveRecipe(recipe);
+    toast("Saved to your recipes");
+    close(true);
+    router.replace(`/recipes/${encodeURIComponent(recipe.id)}`);
+  }
 
   return (
     <Sheet
       open={open}
-      onClose={close}
+      onClose={() => close()}
       title={preview ? "Check and save" : "Import a recipe"}
       wide
       footer={
@@ -96,43 +135,94 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
               Back
             </Button>
             <Button size="lg" className="flex-1" onClick={save}>
-              Save recipe
+              {duplicate ? "Save another copy" : "Save recipe"}
+            </Button>
+          </div>
+        ) : state.kind === "loading" ? (
+          <div className="flex gap-2">
+            <Button variant="secondary" size="lg" onClick={reset}>
+              Cancel
+            </Button>
+            <Button size="lg" className="flex-1" disabled>
+              <Loader2 size={20} className="animate-spin" aria-hidden /> {mode === "link" ? "Reading the page…" : "Reading the photo…"}
             </Button>
           </div>
         ) : mode === "link" ? (
-          <Button block size="lg" onClick={importLink} disabled={!url.trim() || state.kind === "loading"}>
-            {state.kind === "loading" ? <Loader2 size={20} className="animate-spin" aria-hidden /> : <Link2 size={20} aria-hidden />}
-            {state.kind === "loading" ? "Reading the page…" : "Import"}
+          <Button block size="lg" onClick={() => importLink()} disabled={!url.trim()}>
+            <Link2 size={20} aria-hidden /> Import
           </Button>
         ) : (
-          <Button block size="lg" onClick={() => fileRef.current?.click()} disabled={state.kind === "loading" || aiReady === false}>
-            {state.kind === "loading" ? <Loader2 size={20} className="animate-spin" aria-hidden /> : <Camera size={20} aria-hidden />}
-            {state.kind === "loading" ? "Reading the photo…" : "Take or choose a photo"}
+          <Button block size="lg" onClick={() => fileRef.current?.click()} disabled={aiReady === false}>
+            <Camera size={20} aria-hidden /> Take or choose a photo
           </Button>
         )
       }
     >
       {preview ? (
         <div className="space-y-4 py-1">
-          <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}</Field>
+          {duplicate && (
+            <p className="flex flex-wrap items-center gap-x-2 rounded-2xl bg-soon-soft p-3 text-sm text-ink">
+              You already saved this recipe.
+              <Link href={`/recipes/${encodeURIComponent(duplicate.id)}`} onClick={() => close(true)} className="inline-flex min-h-11 items-center font-semibold text-primary hover:underline">
+                Open it
+              </Link>
+            </p>
+          )}
+          <div className="flex gap-3">
+            {preview.image && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={preview.image} alt="" className="h-20 w-20 shrink-0 rounded-2xl bg-surface-2 object-cover" />
+            )}
+            <div className="min-w-0 flex-1">
+              <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}</Field>
+            </div>
+          </div>
           <p className="text-sm text-ink-2">
             Serves {preview.servings}
             {preview.minutes ? ` · ${preview.minutes} min` : ""} · {preview.ingredients.length} ingredients · {preview.steps.length} steps
-            {preview.tbspMl === 15 ? " · uses 15 ml tablespoons" : ""}
           </p>
+          {preview.ingredients.some((i) => i.unit === "tbsp") && (
+            <div>
+              <p className="mb-1.5 text-sm font-medium text-ink">Which tablespoon does it use?</p>
+              <Segmented
+                label="Tablespoon size"
+                value={tbsp}
+                onChange={setTbsp}
+                options={[
+                  { value: "20", label: "Australian 20 ml" },
+                  { value: "15", label: "US/UK 15 ml" },
+                ]}
+              />
+            </div>
+          )}
           <div>
             <h3 className="mb-1.5 text-sm font-semibold text-ink">Ingredients</h3>
             <ul className="max-h-56 space-y-1 overflow-y-auto rounded-2xl bg-surface-2 p-3 text-[15px]">
               {preview.ingredients.map((ing, i) => (
-                <li key={i}>
+                <li key={i} className={looksOff(ing.name) ? "text-spoiled" : undefined}>
                   <span className="text-ink-2">{formatAmount(ing.quantity, ing.unit, ing.quantityMax)}</span> {ing.name}
                   {ing.note && <span className="text-ink-3">, {ing.note}</span>}
                 </li>
               ))}
             </ul>
           </div>
-          {state.kind === "done" && state.method === "ai" && (
-            <p className="text-sm text-ink-3">Read by the AI helper, so give the amounts a quick check. You can fix anything after saving.</p>
+          {preview.steps.length > 0 && (
+            <details className="rounded-2xl bg-surface-2 p-3 text-[15px]">
+              <summary className="min-h-11 cursor-pointer content-center font-semibold text-ink">Method ({preview.steps.length} steps)</summary>
+              <ol className="mt-2 list-decimal space-y-2 pl-5 text-ink-2">
+                {preview.steps.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ol>
+            </details>
+          )}
+          {(flagged > 0 || (state.kind === "done" && state.method === "ai")) && (
+            <p className="flex items-start gap-2 text-sm text-ink-2">
+              <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
+              {flagged > 0
+                ? `${flagged} ${flagged === 1 ? "line looks" : "lines look"} misread. Save, then tap Edit on the recipe to fix ${flagged === 1 ? "it" : "them"}.`
+                : "Read by the AI helper, so check the amounts. You can tap Edit on the recipe after saving."}
+            </p>
           )}
         </div>
       ) : (
@@ -168,11 +258,16 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
             <p className="text-[15px] text-ink-2">
               {aiReady === false
                 ? "Reading photos needs the AI helper, which isn't set up yet. Paste a link instead."
-                : "Snap a cookbook page, a recipe card or a screenshot. We'll copy out the ingredients and method."}
+                : "Snap a cookbook page or recipe card, or pick a screenshot. We'll copy out the ingredients and method."}
             </p>
           )}
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => {
-              importPhoto(e.target.files?.[0]);
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              void importPhoto(e.target.files?.[0]);
               e.target.value = "";
             }}
           />

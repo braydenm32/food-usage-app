@@ -27,6 +27,18 @@ describe("parseIngredientLine", () => {
     expect(parseIngredientLine("Salt and pepper, to taste").quantity).toBeUndefined();
   });
 
+  it("handles the formats reviewers caught", () => {
+    expect(parseIngredientLine("1/2 cup sugar")).toMatchObject({ quantity: 0.5, unit: "cup", name: "sugar" });
+    expect(parseIngredientLine("1½ cups milk")).toMatchObject({ quantity: 1.5, unit: "cup", name: "milk" });
+    expect(parseIngredientLine("1 ¼ cups water")).toMatchObject({ quantity: 1.25, unit: "cup", name: "water" });
+    expect(parseIngredientLine("200g/7oz butter")).toMatchObject({ quantity: 200, unit: "g", name: "butter" });
+    expect(parseIngredientLine("2 x 400g cans tomatoes")).toMatchObject({ quantity: 2, unit: "tin", name: "tomatoes", note: "400g" });
+    expect(parseIngredientLine("1 cup (250ml) milk")).toMatchObject({ quantity: 1, unit: "cup", name: "milk", note: "250ml" });
+    expect(parseIngredientLine("1 can (14 oz) tomatoes")).toMatchObject({ unit: "tin", name: "tomatoes", note: "14 oz" });
+    expect(parseIngredientLine("1 package (8 oz) cream cheese")).toMatchObject({ unit: "pack", name: "cream cheese", note: "8 oz" });
+    expect(parseIngredientLine("1 onion, finely chopped (about 200g)")).toMatchObject({ name: "onion", note: "about 200g, finely chopped" });
+  });
+
   it("doesn't treat words starting with c or t as units", () => {
     expect(parseIngredientLine("2 carrots, grated")).toMatchObject({ quantity: 2, name: "carrots", note: "grated" });
     expect(parseIngredientLine("3 tomatoes").unit).toBeUndefined();
@@ -44,6 +56,7 @@ describe("method text", () => {
   });
   it("knows Australian sites use 20 ml tablespoons", () => {
     expect(tablespoonFor("https://www.taste.com.au/recipes/x")).toBe(20);
+    expect(tablespoonFor("https://www.example.co.nz/recipes/x")).toBe(15);
     expect(tablespoonFor("https://www.bbcgoodfood.com/recipes/x")).toBe(15);
   });
 });
@@ -115,6 +128,10 @@ describe("findTimers", () => {
       { label: "20 mins", seconds: 1200 },
     ]);
     expect(findTimers("Cook 1h")).toEqual([{ label: "1h", seconds: 3600 }]);
+    expect(findTimers("Simmer 1½ hours")[0].seconds).toBe(5400);
+    expect(findTimers("Simmer 1 1/2 hours")[0].seconds).toBe(5400);
+    expect(findTimers("Braise 1h30m")[0].seconds).toBe(5400);
+    expect(findTimers("Boil for 10 to 12 minutes")[0]).toEqual({ label: "10 to 12 minutes", seconds: 600 });
   });
   it("ignores things that aren't times", () => {
     expect(findTimers("Add 2 m of string")).toEqual([]);

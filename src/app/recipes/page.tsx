@@ -257,9 +257,10 @@ function RecipesView() {
       <ImportSheet
         open={importOpen}
         initialUrl={sharedUrl ?? undefined}
-        onClose={() => {
+        onClose={(saved) => {
           setImportOpen(false);
-          if (sharedUrl) router.replace("/recipes");
+          // Clear the shared link from the address, unless saving already moved us to the recipe.
+          if (sharedUrl && !saved) router.replace("/recipes");
         }}
       />
       <div className="px-5 pb-8 lg:px-0">

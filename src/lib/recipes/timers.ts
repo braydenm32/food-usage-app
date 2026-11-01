@@ -13,12 +13,26 @@ const UNIT_SECONDS: Record<string, number> = {
   h: 3600, hr: 3600, hrs: 3600, hour: 3600, hours: 3600,
 };
 
-const RE = /(\d+(?:\.\d+)?|½|an?|one|half an?)(?:\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?))?\s*(?:more\s+)?(seconds?|secs?|minutes?|mins?|hours?|hrs?|h|m)\b(?:\s*(?:and|&)?\s*(\d+)\s*(minutes?|mins?))?/gi;
+const NUM = String.raw`\d+\s+\d+\/\d+|\d+\s*[½¼¾]|\d+\/\d+|[½¼¾]|\d+(?:\.\d+)?`;
+const RE = new RegExp(
+  String.raw`(?<![\d/.])(${NUM}|\ban?\b|\bone\b|\bhalf an?\b)(?:\s*(?:-|–|—|to)\s*(${NUM}))?\s*(?:more\s+)?(seconds?|secs?|minutes?|mins?|hours?|hrs?|h|m)(?![a-z])(?:\s*(?:and|&)?\s*(\d+)\s*(minutes?|mins?|m)\b)?`,
+  "gi",
+);
+const FRACTIONS: Record<string, number> = { "½": 0.5, "¼": 0.25, "¾": 0.75 };
 
 function lead(v: string): number {
-  const t = v.toLowerCase();
-  if (t === "½" || t.startsWith("half")) return 0.5;
+  const t = v.toLowerCase().trim();
+  if (t.startsWith("half")) return 0.5;
   if (t === "a" || t === "an" || t === "one") return 1;
+  const m = t.match(/^(\d+)?\s*(?:(\d+)\/(\d+)|([½¼¾]))?$/);
+  if (m && (m[2] || m[4])) {
+    const whole = Number(m[1] ?? 0);
+    return whole + (m[4] ? FRACTIONS[m[4]] : Number(m[2]) / Number(m[3]));
+  }
+  if (/^\d+\/\d+$/.test(t)) {
+    const [a, b] = t.split("/").map(Number);
+    return a / b;
+  }
   return Number(t);
 }
 
@@ -29,7 +43,7 @@ export function findTimers(step: string): StepTimer[] {
     const unit = UNIT_SECONDS[m[3].toLowerCase()];
     if (!unit) continue;
     // "h" and "m" alone only count straight after a number ("1h", "20m").
-    if (/^[hm]$/i.test(m[3]) && !/\d[hm]$/i.test(m[0].trim())) continue;
+    if (/^[hm]$/i.test(m[3]) && !/\d[hm]/i.test(m[0])) continue;
     let seconds = lead(m[1]) * unit;
     if (m[4] && m[5]) seconds += Number(m[4]) * 60;
     if (!Number.isFinite(seconds) || seconds < 10 || seconds > 12 * 3600) continue;

@@ -5,7 +5,7 @@ import { Button, Sheet, Stepper, Switch, cx } from "@/components/ui";
 import { StatusPill } from "@/components/freshness";
 import { toast } from "@/components/toast";
 import { useLarder } from "@/lib/store";
-import { defaultDeduction, formatAmount, stepFor } from "@/lib/recipes/quantity";
+import { defaultDeduction, formatAmount, stepFor, tbspOf } from "@/lib/recipes/quantity";
 import { formatQuantity } from "@/components/pantry/format";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { storageDays } from "@/lib/shelf-life/engine";
@@ -50,7 +50,7 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
   );
 
   const [amounts, setAmounts] = useState<Record<string, number>>(() =>
-    Object.fromEntries(rows.map((r) => [r.item.id, defaultDeduction(r.ing, r.item, factor, recipe.tbspMl ?? 20)])),
+    Object.fromEntries(rows.map((r) => [r.item.id, defaultDeduction(r.ing, r.item, factor, tbspOf(recipe))])),
   );
 
   const changed = rows.filter((r) => (amounts[r.item.id] ?? 0) > 0);

@@ -1,82 +1,17 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { connection, NextResponse } from "next/server";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import Anthropic from "@anthropic-ai/sdk";
 import { AI_MODEL, getAnthropic } from "@/lib/ai";
 import { finishImport, pageText, parseIngredientLine, recipeFromHtml, toCelsius } from "@/lib/recipes/import";
+import { SafeFetchError, safeFetchPage } from "@/lib/safe-fetch";
 import type { Recipe } from "@/lib/types";
 
-const MAX_HTML_BYTES = 3 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 function fail(status: number, error: string, message: string) {
   return NextResponse.json({ error, message }, { status });
-}
-
-/* ---------- safe fetching of a user-supplied URL ---------- */
-
-function isPrivateAddress(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const [a, b] = ip.split(".").map(Number);
-    return (
-      a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224
-    );
-  }
-  const v = ip.toLowerCase();
-  if (v.startsWith("::ffff:")) return isPrivateAddress(v.slice(7));
-  return v === "::" || v === "::1" || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe80");
-}
-
-async function assertPublicUrl(raw: string): Promise<URL> {
-  const url = new URL(raw);
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("protocol");
-  if (url.username || url.password || (url.port && url.port !== "80" && url.port !== "443")) throw new Error("url");
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
-  if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) throw new Error("private");
-  return url;
-}
-
-/** Fetch a public web page, following up to 3 redirects and re-checking each hop. */
-async function fetchPage(raw: string): Promise<{ html: string; url: string }> {
-  let current = raw;
-  for (let hop = 0; hop < 4; hop++) {
-    const url = await assertPublicUrl(current);
-    const res = await fetch(url, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(10_000),
-      headers: { "user-agent": "Mozilla/5.0 (compatible; LarderRecipeImport/1.0)", accept: "text/html,application/xhtml+xml" },
-    });
-    if (res.status >= 300 && res.status < 400) {
-      const next = res.headers.get("location");
-      if (!next) throw new Error("redirect");
-      current = new URL(next, url).toString();
-      continue;
-    }
-    if (!res.ok) throw new Error(`status ${res.status}`);
-    const type = res.headers.get("content-type") ?? "";
-    if (!/html|xml/.test(type)) throw new Error("not html");
-    const reader = res.body?.getReader();
-    if (!reader) throw new Error("empty");
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_HTML_BYTES) {
-        await reader.cancel();
-        break; // recipe data is usually near the top; keep what we have
-      }
-      chunks.push(value);
-    }
-    return { html: Buffer.concat(chunks).toString("utf8"), url: url.toString() };
-  }
-  throw new Error("too many redirects");
 }
 
 /* ---------- AI extraction (pages without recipe data, and photos) ---------- */
@@ -167,6 +102,7 @@ export async function POST(req: Request) {
         { type: "text", text: "Copy the recipe in this photo." },
       ]);
       if (!r) return fail(422, "no_recipe", "Couldn't find a recipe in that photo. Try a closer, well-lit shot of the whole page.");
+      // A photo could be from any cookbook: assume Australian 20 ml unless the user says otherwise in the preview.
       return NextResponse.json({ recipe: fromAi(r, undefined, 20), method: "ai" });
     } catch (err) {
       return aiError(err);
@@ -184,9 +120,22 @@ export async function POST(req: Request) {
 
   let page: { html: string; url: string };
   try {
-    page = await fetchPage(url);
-  } catch {
-    return fail(422, "fetch_failed", "Couldn't open that page. Check the link, or save a screenshot and import the photo instead.");
+    page = await safeFetchPage(url);
+  } catch (e) {
+    const code = e instanceof SafeFetchError ? e.code : "network";
+    const message =
+      code === "blocked"
+        ? "That link points somewhere Larder can't open. Use the recipe's public web address."
+        : code === "timeout"
+          ? "That site took too long to answer. Try again, or import a screenshot as a photo."
+          : code === "http" && (e as SafeFetchError).status === 404
+            ? "That page wasn't found. Check the link is complete."
+            : code === "http" && [401, 403, 429].includes((e as SafeFetchError).status ?? 0)
+              ? "That site blocks other apps from reading its pages. Take a screenshot and import it as a photo instead."
+              : code === "not_html"
+                ? "That link isn't a web page. Paste the link to the recipe itself."
+                : "Couldn't open that page. Check the link, or import a screenshot as a photo instead.";
+    return fail(422, "fetch_failed", message);
   }
 
   const recipe = recipeFromHtml(page.html, page.url);

@@ -17,6 +17,7 @@ const UNIT_ALIASES: Record<string, string> = {
   tbsp: "tbsp", tbs: "tbsp", tbl: "tbsp", tablespoon: "tbsp", tablespoons: "tbsp", T: "tbsp",
   cup: "cup", cups: "cup", c: "cup",
   clove: "clove", cloves: "clove", slice: "slice", slices: "slice", pinch: "pinch", pinches: "pinch",
+  package: "pack", packages: "pack", pkt: "pack", pkts: "pack", pkg: "pack",
   bunch: "bunch", bunches: "bunch", can: "tin", cans: "tin", tin: "tin", tins: "tin",
   jar: "jar", jars: "jar", packet: "pack", packets: "pack", pack: "pack", packs: "pack",
   sprig: "sprig", sprigs: "sprig", handful: "handful", handfuls: "handful", stick: "stick", sticks: "stick",
@@ -52,13 +53,15 @@ function num(token: string): number | undefined {
   return Number.isFinite(n) ? n + extra : undefined;
 }
 
-const NUM = String.raw`(?:\d+(?:[.,]\d+)?(?:\s+\d+\/\d+)?|\d+\/\d+|\d*[½¼¾⅓⅔⅛])`;
+// Longest forms first: "1 1/2", "1½", "1/2", "½", then plain "1.5".
+const NUM = String.raw`(?:\d+\s+\d+\/\d+|\d+\s*[½¼¾⅓⅔⅛]|\d+\/\d+|[½¼¾⅓⅔⅛]|\d+(?:[.,]\d+)?)(?![\d/])`;
 const LEAD = new RegExp(String.raw`^(${NUM})(?:\s*(?:-|–|—|to)\s*(${NUM}))?\s*`, "i");
 
-function parseNumberWithMixed(token: string): number | undefined {
-  const parts = token.trim().split(/\s+/);
+export function parseNumberWithMixed(token: string): number | undefined {
+  const t = token.trim().replace(/(\d)\s*([½¼¾⅓⅔⅛])/, "$1 $2");
+  const parts = t.split(/\s+/);
   if (parts.length === 2) return (num(parts[0]) ?? 0) + (num(parts[1]) ?? 0);
-  return num(token);
+  return num(t);
 }
 
 /** Round a converted metric amount to something a cook would measure. */
@@ -91,18 +94,27 @@ export function parseIngredientLine(raw: string): RecipeIngredient {
     line = line.replace(/^an?\s/i, "");
   }
 
-  // "1 (400g) tin tomatoes": keep the size as a note.
-  let note: string | undefined;
-  const size = line.match(/^\(([^)]{1,20})\)\s*/);
-  if (size) {
-    note = size[1];
-    line = line.slice(size[0].length);
-  }
+  // "1 (400g) tin tomatoes" and "2 x 400g tins tomatoes": keep the pack size as a note.
+  const notes: string[] = [];
+  const takeSize = () => {
+    const paren = line.match(/^\(([^)]{1,24})\)\s*/);
+    if (paren) {
+      notes.push(paren[1].trim());
+      line = line.slice(paren[0].length);
+      return;
+    }
+    const times = line.match(/^[x×]\s*(\d+(?:\.\d+)?\s*(?:g|kg|ml|l|oz|lb)\b)\s*/i);
+    if (times) {
+      notes.push(times[1].replace(/\s+/g, ""));
+      line = line.slice(times[0].length);
+    }
+  };
+  if (quantity !== undefined) takeSize();
 
   let unit: string | undefined;
   if (quantity !== undefined) {
     const two = line.match(/^(fl\.? oz|fluid ounces?)\b\.?\s*/i);
-    const one = line.match(/^([a-zA-Z]+)\.?(?:\s+|$)/);
+    const one = line.match(/^([a-zA-Z]+)\.?(?:\s+|(?=[/(])|$)/);
     if (two) {
       unit = "fl oz";
       line = line.slice(two[0].length);
@@ -115,6 +127,9 @@ export function parseIngredientLine(raw: string): RecipeIngredient {
         line = line.slice(one[0].length);
       }
     }
+    // "200g/7oz butter": drop the second measure. "1 cup (250ml) milk": keep it as a note.
+    line = line.replace(/^\/\s*\d+(?:[.,]\d+)?\s*(?:oz|lb|g|kg|ml|l|cups?)\b\.?\s*/i, "");
+    takeSize();
     line = line.replace(/^of\s+/i, "");
   }
 
@@ -125,17 +140,23 @@ export function parseIngredientLine(raw: string): RecipeIngredient {
     unit = metric;
   }
 
-  // Split "butter, softened" into the name and a prep note.
-  let name = line.trim();
-  const comma = name.match(/^([^,(]+?)\s*[,(]\s*(.+?)\)?$/);
-  if (comma && comma[1].length >= 2) {
-    name = comma[1].trim();
-    note = [note, comma[2].trim()].filter(Boolean).join(", ");
+  // Pull out "(about 200g)" anywhere, then split "butter, softened" into the name and a prep note.
+  let name = line.trim().replace(/\s*\(([^)]*)\)\s*/g, (_, inner: string) => {
+    if (inner.trim()) notes.push(inner.trim());
+    return " ";
+  });
+  name = name.replace(/\s+/g, " ").trim();
+  const comma = name.indexOf(",");
+  if (comma >= 2) {
+    const rest = name.slice(comma + 1).trim();
+    name = name.slice(0, comma).trim();
+    if (rest) notes.push(rest);
   }
   if (/to taste|as needed|to serve/i.test(name)) {
     name = name.replace(/,?\s*(to taste|as needed|to serve)/i, "").trim();
-    note = [note, "to taste"].filter(Boolean).join(", ");
+    notes.push("to taste");
   }
+  const note = notes.length ? [...new Set(notes)].join(", ") : undefined;
   name = name || raw.trim();
 
   const ing: RecipeIngredient = { name, foodTypeId: foodTypeIdFor(name) };
@@ -274,12 +295,12 @@ function tagsOf(node: Record<string, Json>): string[] {
   return [...seen].slice(0, 6);
 }
 
-/** Australian sites use 20 ml tablespoons; most others use 15 ml. */
+/** Australian sites use 20 ml tablespoons; most others (including NZ) use 15 ml. */
 export function tablespoonFor(url: string | undefined): 15 | 20 {
   if (!url) return 20;
   try {
     const host = new URL(url).hostname;
-    return /\.(au|nz)$/.test(host) ? 20 : 15;
+    return /\.au$/.test(host) ? 20 : 15;
   } catch {
     return 20;
   }
