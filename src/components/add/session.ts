@@ -18,6 +18,8 @@ export interface AddSession {
   source: PantryItem["source"];
   storeName?: string | null;
   note?: string;
+  /** Shopping-list rows to take off the list when these drafts are added ("Put in the larder"). */
+  removeListIds?: string[];
   updatedAt: number;
 }
 
@@ -49,6 +51,11 @@ function writeSession(method: AddMethod, s: AddSession | null) {
   } catch {
     // Storage full or blocked: the review still works, it just won't survive a refresh.
   }
+}
+
+/** Start a review from elsewhere in the app (e.g. the shopping list). Open `/add?method=…&step=review` next. */
+export function startReviewSession(method: AddMethod, s: Omit<AddSession, "updatedAt">) {
+  writeSession(method, { ...s, updatedAt: Date.now() });
 }
 
 /** Methods with unfinished drafts, for the "pick up where you left off" banner. */

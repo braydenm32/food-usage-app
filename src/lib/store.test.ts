@@ -157,6 +157,19 @@ describe("freezing", () => {
     expect(s().items[0].frozenAt).toBe(frozenAt);
     expect(s().items[0].thawedAt).toBeUndefined();
   });
+
+  it("splits an item when only some of it moves, sharing the price, and undoes in one step", () => {
+    const [chops] = s().addItems([draft({ name: "Lamb chops", foodTypeId: null, unit: "item", quantity: 6, price: 18, locationId: "fridge" })], "manual");
+    s().moveItem(chops.id, "freezer", 4);
+    const fridge = s().items.find((i) => i.id === chops.id)!;
+    const frozen = s().items.find((i) => i.id !== chops.id)!;
+    expect(fridge).toMatchObject({ quantity: 2, initialQuantity: 2, price: 6, locationId: "fridge" });
+    expect(frozen).toMatchObject({ quantity: 4, initialQuantity: 4, price: 12, locationId: "freezer", addedAt: chops.addedAt });
+    expect(frozen.frozenAt).toBeDefined();
+    s().performUndo();
+    expect(s().items).toHaveLength(1);
+    expect(s().items[0]).toMatchObject({ quantity: 6, locationId: "fridge" });
+  });
 });
 
 describe("overrides", () => {

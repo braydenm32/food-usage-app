@@ -83,7 +83,7 @@ function span(days: number) {
 }
 
 /** Move an item and explain what that does to its date, with a warning when freezing won't help. */
-export function moveTo(id: string, locationId: string, notify: Notify = undoToast) {
+export function moveTo(id: string, locationId: string, notify: Notify = undoToast, quantity?: number) {
   const s = useLarder.getState();
   const item = s.items.find((i) => i.id === id);
   if (!item || item.locationId === locationId) return;
@@ -95,14 +95,15 @@ export function moveTo(id: string, locationId: string, notify: Notify = undoToas
   // Check before moving: once frozen, the freezer clock applies.
   const pastDate = freezing && isPastDateForFreezing(item, { food, override, location: from });
 
-  s.moveItem(id, locationId);
+  const partial = quantity !== undefined && quantity > 0 && quantity < item.quantity;
+  s.moveItem(id, locationId, partial ? quantity : undefined);
 
-  let msg = `Moved to the ${to?.name.toLowerCase() ?? "new spot"}`;
+  let msg = partial ? `Moved ${quantity} to the ${to?.name.toLowerCase() ?? "new spot"}` : `Moved to the ${to?.name.toLowerCase() ?? "new spot"}`;
   if (freezing) {
     if (pastDate) {
       msg = "Frozen, but it's already past its date — freezing won't make it safe";
     } else {
-      msg = `Frozen — good for about ${span(storageDays(food, override, "freezer", item.name))}`;
+      msg = `${partial ? `Froze ${quantity}` : "Frozen"} — good for about ${span(storageDays(food, override, "freezer", item.name))}`;
       if (freezerNotRecommended(food)) msg += ". Not great frozen — texture suffers";
     }
   } else if (from?.kind === "freezer" && to?.kind !== "freezer") {

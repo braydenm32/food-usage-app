@@ -265,7 +265,8 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   function submit(fresh: ReviewDraft[], merges: MergePlan[]) {
     if (fresh.length + merges.length === 0) return;
     setSubmitting(true);
-    const created = addItems(fresh, session.source, merges.length ? { merge: merges } : undefined);
+    const removeListIds = session.removeListIds?.length ? session.removeListIds : undefined;
+    const created = addItems(fresh, session.source, merges.length || removeListIds ? { merge: merges.length ? merges : undefined, removeListIds } : undefined);
     const n = created.length;
     const m = merges.length;
     const message =
@@ -285,7 +286,9 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   }
 
   const backHref = inReview ? `/add?method=${method}` : "/add";
-  const reviewTitle = method === "receipt" ? "Check your receipt" : method === "list" ? "Check your list" : "Check these items";
+  const reviewTitle = session.removeListIds?.length
+    ? "Put away your shopping"
+    : method === "receipt" ? "Check your receipt" : method === "list" ? "Check your list" : "Check these items";
   const foodCount = drafts.filter((d) => d.isFood).length;
   const showPrices =
     session.source === "receipt" || session.source === "order" || drafts.some((d) => d.price !== undefined);
