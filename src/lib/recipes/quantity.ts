@@ -1,6 +1,7 @@
 import type { PantryItem, RecipeIngredient, Unit } from "@/lib/types";
 
-const TO_ML: Record<string, number> = { ml: 1, l: 1000, tsp: 5, tbsp: 15, cup: 250 };
+/** Australian measures: 20 ml tablespoon, 250 ml cup. Recipes can say they use 15 ml tablespoons. */
+const TO_ML: Record<string, number> = { ml: 1, l: 1000, tsp: 5, tbsp: 20, cup: 250 };
 const TO_G: Record<string, number> = { g: 1, kg: 1000 };
 
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -21,20 +22,23 @@ export function formatQty(n: number): string {
   return n >= 10 ? String(Math.round(n)) : String(round(n));
 }
 
-export function formatAmount(quantity: number | undefined, unit?: string): string {
+export function formatAmount(quantity: number | undefined, unit?: string, quantityMax?: number): string {
   if (quantity === undefined) return "";
-  const q = formatQty(quantity);
+  const q = quantityMax !== undefined && quantityMax > quantity ? `${formatQty(quantity)}–${formatQty(quantityMax)}` : formatQty(quantity);
   if (!unit || unit === "item") return q;
   if (/^(g|kg|ml|L)$/.test(unit)) return `${q}${unit}`;
   return `${q} ${unit}`;
 }
 
 export function scaleIngredient(ing: RecipeIngredient, factor: number): RecipeIngredient {
-  return ing.quantity === undefined ? ing : { ...ing, quantity: round(ing.quantity * factor) };
+  if (ing.quantity === undefined) return ing;
+  const scaled: RecipeIngredient = { ...ing, quantity: round(ing.quantity * factor) };
+  if (ing.quantityMax !== undefined) scaled.quantityMax = round(ing.quantityMax * factor);
+  return scaled;
 }
 
 /** Convert the recipe amount into the pantry item's own unit, or null when we can't tell. */
-export function convertToItemUnit(ing: RecipeIngredient, item: PantryItem): number | null {
+export function convertToItemUnit(ing: RecipeIngredient, item: PantryItem, tbspMl: 15 | 20 = 20): number | null {
   const q = ing.quantity;
   if (q === undefined) return null;
   const u = (ing.unit ?? "item").toLowerCase();
@@ -46,7 +50,7 @@ export function convertToItemUnit(ing: RecipeIngredient, item: PantryItem): numb
   }
   if (iu === "ml" || iu === "L") {
     if (!(u in TO_ML)) return null;
-    const ml = q * TO_ML[u];
+    const ml = q * (u === "tbsp" ? tbspMl : TO_ML[u]);
     return iu === "ml" ? ml : ml / 1000;
   }
   if (iu === "tin" || iu === "jar" || iu === "bottle") {
@@ -63,9 +67,9 @@ export function convertToItemUnit(ing: RecipeIngredient, item: PantryItem): numb
 }
 
 /** Sensible starting deduction for an item, never more than what is there. */
-export function defaultDeduction(ing: RecipeIngredient, item: PantryItem, factor: number): number {
+export function defaultDeduction(ing: RecipeIngredient, item: PantryItem, factor: number, tbspMl: 15 | 20 = 20): number {
   const scaled = scaleIngredient(ing, factor);
-  const converted = convertToItemUnit(scaled, item);
+  const converted = convertToItemUnit(scaled, item, tbspMl);
   let amount: number;
   if (converted !== null && converted > 0) amount = converted;
   else if (item.quantity <= 1 || (item.unit === "item" && item.quantity <= 2)) amount = item.quantity;

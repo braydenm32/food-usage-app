@@ -3,10 +3,11 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BookOpen, CalendarDays, CircleAlert, Globe, Sparkles, WifiOff, X } from "lucide-react";
+import { BookOpen, CalendarDays, CircleAlert, Download, Globe, Sparkles, WifiOff, X } from "lucide-react";
 import { Button, Chip, EmptyState, PageHeader, Segmented, SectionTitle, buttonClass } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { RecipeCard, RecipeCardSkeleton } from "@/components/recipes/recipe-card";
+import { ImportSheet } from "@/components/recipes/import-sheet";
 import { BUILTIN_RECIPES } from "@/lib/recipes/builtin";
 import { cacheRecipes } from "@/lib/recipes/cache";
 import { allergenHits, analyseRecipe, isRecipeAllowed, rankRecipes, scoreOf, type RankedRecipe } from "@/lib/recipes/suggest";
@@ -65,7 +66,16 @@ function RecipesView() {
   const profile = useLarder((s) => s.profile);
   const saved = useLarder((s) => s.savedRecipes);
 
-  const [tab, setTab] = useState<Tab>("ideas");
+  // A link shared to Larder from another app arrives as ?url= or inside ?text=.
+  const sharedUrl = params.get("url") || params.get("text")?.match(/https?:\/\/\S+/)?.[0] || null;
+  const [importOpen, setImportOpen] = useState(!!sharedUrl);
+  const [prevShared, setPrevShared] = useState(sharedUrl);
+  if (prevShared !== sharedUrl) {
+    setPrevShared(sharedUrl);
+    if (sharedUrl) setImportOpen(true);
+  }
+
+  const [tab, setTab] = useState<Tab>(sharedUrl ? "saved" : "ideas");
   const [quick, setQuick] = useState(false);
   const [veg, setVeg] = useState(false);
   const [useItem, setUseItem] = useState<string | null>(useParam);
@@ -221,7 +231,17 @@ function RecipesView() {
         subtitle={atRiskCount > 0 ? `${atRiskCount} ${atRiskCount === 1 ? "thing needs" : "things need"} using up` : "Nothing is close to its date. Nice."}
         showSettings
         actions={
-          plannerOn ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              aria-label="Import a recipe"
+              title="Import a recipe"
+              className="inline-flex h-11 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-primary transition-colors hover:bg-surface-2"
+            >
+              <Download size={20} aria-hidden /> <span className="hidden sm:inline">Import</span>
+            </button>
+            {plannerOn ? (
             <Link
               href="/plan"
               aria-label="Meal plan"
@@ -230,8 +250,17 @@ function RecipesView() {
             >
               <CalendarDays size={22} aria-hidden />
             </Link>
-          ) : undefined
+            ) : null}
+          </>
         }
+      />
+      <ImportSheet
+        open={importOpen}
+        initialUrl={sharedUrl ?? undefined}
+        onClose={() => {
+          setImportOpen(false);
+          if (sharedUrl) router.replace("/recipes");
+        }}
       />
       <div className="px-5 pb-8 lg:px-0">
         {planDay && (
@@ -408,11 +437,16 @@ function RecipesView() {
               <EmptyState
                 emoji="🔖"
                 title="No saved recipes yet"
-                body="Save recipes you want to cook again and they will live here, even offline."
+                body="Import recipes from any website or a photo of a cookbook, or save ideas you want to cook again. They live here, even offline."
                 action={
-                  <button type="button" onClick={() => setTab("ideas")} className={buttonClass("secondary")}>
-                    <BookOpen size={18} aria-hidden /> Browse recipes
-                  </button>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <button type="button" onClick={() => setImportOpen(true)} className={buttonClass("primary")}>
+                      <Download size={18} aria-hidden /> Import a recipe
+                    </button>
+                    <button type="button" onClick={() => setTab("ideas")} className={buttonClass("secondary")}>
+                      <BookOpen size={18} aria-hidden /> Browse recipes
+                    </button>
+                  </div>
                 }
               />
             ) : (

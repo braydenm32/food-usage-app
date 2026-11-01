@@ -50,7 +50,7 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
   );
 
   const [amounts, setAmounts] = useState<Record<string, number>>(() =>
-    Object.fromEntries(rows.map((r) => [r.item.id, defaultDeduction(r.ing, r.item, factor)])),
+    Object.fromEntries(rows.map((r) => [r.item.id, defaultDeduction(r.ing, r.item, factor, recipe.tbspMl ?? 20)])),
   );
 
   const changed = rows.filter((r) => (amounts[r.item.id] ?? 0) > 0);

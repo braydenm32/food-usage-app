@@ -147,7 +147,11 @@ export interface HouseholdProfile {
 export interface RecipeIngredient {
   name: string;
   quantity?: number;
+  /** Upper end of a range such as "6–8 tbsp". */
+  quantityMax?: number;
   unit?: string;
+  /** Prep or size note: "softened", "400 g tin". */
+  note?: string;
   /** Matched food type, for pantry deduction and shopping list. */
   foodTypeId?: string | null;
   optional?: boolean;
@@ -166,6 +170,8 @@ export interface Recipe {
   tags: string[];
   summary?: string;
   savedAt?: string;
+  /** Tablespoon size the recipe was written with. Australian recipes use 20 ml; most others 15 ml. */
+  tbspMl?: 15 | 20;
 }
 
 export interface ShoppingListItem {

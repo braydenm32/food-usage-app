@@ -2,7 +2,7 @@ import Link from "next/link";
 import { CalendarPlus, CircleAlert, Clock, Users } from "lucide-react";
 import { Card, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
-import type { RankedRecipe } from "@/lib/recipes/suggest";
+import { stockCount, type RankedRecipe } from "@/lib/recipes/suggest";
 
 export function RecipeCard({
   ranked,
@@ -24,6 +24,7 @@ export function RecipeCard({
 }) {
   const { recipe, atRisk, missing, uses } = ranked;
   const have = missing.length === 0;
+  const stock = stockCount(ranked);
   return (
     <Card className="relative overflow-hidden transition-colors hover:bg-surface-2/60">
       <div className="flex gap-3 p-4">
@@ -70,7 +71,7 @@ export function RecipeCard({
                 ? uses.length > 0
                   ? "You have everything"
                   : "Just staples needed"
-                : `Need ${missing.length}: ${missing.slice(0, 2).map((m) => m.name).join(", ")}${missing.length > 2 ? "…" : ""}`}
+                : `You have ${stock.have} of ${stock.total} · need ${missing.slice(0, 2).map((m) => m.name.toLowerCase()).join(", ")}${missing.length > 2 ? "…" : ""}`}
             </p>
           )}
           {planLabel && onPlan && (

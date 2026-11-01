@@ -103,6 +103,12 @@ export function analyseRecipe(recipe: Recipe, views: RankableItem[]): Omit<Ranke
   };
 }
 
+/** "You have 6 of 9": ingredients that count (not optional, not staples) and how many are in the larder. */
+export function stockCount(a: Pick<RankedRecipe, "recipe" | "missing">): { have: number; total: number } {
+  const total = a.recipe.ingredients.filter((i) => !i.optional && !isStaple(i)).length;
+  return { have: Math.max(0, total - a.missing.length), total };
+}
+
 export function scoreOf(a: Omit<RankedRecipe, "score">): number {
   return a.uses.reduce((s, u) => s + STATUS_WEIGHT[u.status], 0) - a.missing.length;
 }
