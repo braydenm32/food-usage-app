@@ -40,8 +40,10 @@ const DENSITY: [RegExp, number][] = [
 
 /** Typical weight of one whole item, in grams. Approximate edible weights. */
 const EACH: [RegExp, number][] = [
-  [/\begg/, 50],
-  [/\bgarlic\b|\bclove/, 5],
+  [/\beggplant/, 400],
+  [/\beggs?\b/, 50],
+  [/\bgarlic (bulb|head)|\bbulbs? of garlic|\bheads? of garlic/, 45],
+  [/\bgarlic\b|^clove$/, 5],
   [/\bspring onion|\bshallot/, 15],
   [/\bonion/, 150],
   [/\bcarrot/, 120],
@@ -91,12 +93,14 @@ export function ingredientGrams(ing: RecipeIngredient, tbspMl: 15 | 20 = 20): { 
   // "1 (400g) tin": use the size in the note when there is one.
   const size = ing.note?.match(/(\d+(?:\.\d+)?)\s*(g|kg|ml|l)\b/i);
   if (size && (unit === "tin" || unit === "jar" || unit === "pack" || unit === "item")) {
-    const per = Number(size[1]) * (/kg|l/i.test(size[2]) ? 1000 : 1);
-    return { grams: q * per, basis: `${size[1]}${size[2]} each` };
+    const amount = Number(size[1]) * (/^(kg|l)$/i.test(size[2]) ? 1000 : 1);
+    // "1 (400g) tin" or "200g each" is per pack; "4 chicken thighs (about 600g)" is the total.
+    const perPack = unit !== "item" || /\beach\b/i.test(ing.note ?? "") || q === 1;
+    return perPack ? { grams: q * amount, basis: `${size[1]}${size[2]} each` } : { grams: amount, basis: `${size[1]}${size[2]} in total` };
   }
   if (PACK_G[unit]) return { grams: q * PACK_G[unit], basis: `about ${PACK_G[unit]} g per ${unit}` };
   if (unit === "item" || unit === "clove" || unit === "slice") {
-    const each = find(EACH, unit === "clove" ? "clove" : unit === "slice" ? "slice" : name);
+    const each = find(EACH, unit === "clove" ? (/garlic/.test(name) || !/\bcloves?\b/.test(name) ? "garlic" : name) : unit === "slice" ? "slice" : name);
     if (each) return { grams: q * each, basis: `about ${each} g each` };
   }
   return null;
@@ -104,31 +108,59 @@ export function ingredientGrams(ing: RecipeIngredient, tbspMl: 15 | 20 = 20): { 
 
 /* ---------- matching ---------- */
 
-const STOP = new Set(["fresh", "chopped", "diced", "sliced", "large", "small", "medium", "finely", "roughly", "of", "and", "or", "the", "a", "to", "for", "whole", "lean"]);
+const STOP = new Set([
+  ...["fresh", "chopped", "diced", "sliced", "large", "small", "medium", "finely", "roughly", "thinly", "of", "and", "or", "the", "a", "to", "for", "whole", "lean"],
+  ...["boneless", "skinless", "peeled", "minced", "crushed", "grated", "beaten", "softened", "melted", "cold", "warm", "extra", "virgin", "ripe", "clove", "tin", "can", "packet"],
+]);
+/** Words recipes use that the database spells differently. */
+const SYNONYM: Record<string, string> = { tinned: "canned", courgette: "zucchini", courgettes: "zucchini", aubergine: "eggplant", aubergines: "eggplant", cilantro: "coriander", shrimp: "prawn", shrimps: "prawn" };
 const tokens = (s: string) =>
   s
     .toLowerCase()
     .replace(/[^a-z\s]/g, " ")
     .split(/\s+/)
-    .map((t) => t.replace(/(ies)$/, "y").replace(/(oes|es|s)$/, (m) => (m === "oes" ? "o" : "")))
+    .map((t) => SYNONYM[t] ?? t)
+    .map((t) => (t.length > 3 ? t.replace(/ies$/, "y").replace(/oes$/, "o").replace(/(?<!s)s$/, "") : t))
     .filter((t) => t.length > 1 && !STOP.has(t));
+
+/**
+ * The everyday version of a plain ingredient, when the database has several ("milk" is cow's milk,
+ * regular fat, not goat). Matched against the food name; the first food that fits wins a bonus.
+ */
+const DEFAULTS: [RegExp, RegExp][] = [
+  [/^(whole |full cream |full fat )?milk$/, /^milk, cow, fluid, (regular|whole)/i],
+  [/^(white |caster |granulated )?sugar$/, /^sugar, white/i],
+  [/^(brown )?onion$/, /^onion, brown/i],
+  [/^butter$/, /^butter, (plain, )?salted/i],
+  [/^(plain )?flour$/, /^flour, wheat, white, plain/i],
+  [/^rice$/, /^rice, white/i],
+  [/^(olive )?oil$/, /^oil, olive/i],
+  [/^salt$/, /^salt, table/i],
+];
 
 /** Find the closest database food for an ingredient name. Prefers raw, plain versions. */
 export function matchFood(name: string, foods: FoodComposition[] = FOODS): FoodComposition | null {
-  const want = tokens(name);
+  // "chicken thighs, skin on" → match on "chicken thighs"; what comes after the comma is prep.
+  const want = tokens(name.split(/,|\(/)[0]);
   if (want.length === 0 || foods.length === 0) return null;
+  // The ingredient's main word ("beans" in "butter beans", "cheese" in "cream cheese") must be in the food's name.
+  const head = want[want.length - 1];
+  const plain = want.join(" ");
+  const preferred = DEFAULTS.find(([re]) => re.test(plain))?.[1];
   let best: { f: FoodComposition; score: number } | null = null;
   for (const f of foods) {
     const have = tokens(f.name);
+    if (!have.includes(head)) continue;
     const first = have[0];
     let hit = 0;
     for (const w of want) if (have.includes(w)) hit++;
-    if (hit === 0) continue;
+    if (hit / want.length < 0.66) continue;
     // All the ingredient's words, the food's main word, few extra words, and raw/plain forms score higher.
     let score = (hit / want.length) * 10 - (have.length - hit) * 0.3;
     if (want.includes(first)) score += 2;
     if (/\braw\b|\bfresh\b|\bunprepared\b/i.test(f.name)) score += 0.8;
     if (/\b(fried|battered|canned in syrup|takeaway|commercial)\b/i.test(f.name)) score -= 0.8;
+    if (preferred?.test(f.name)) score += 3;
     if (!best || score > best.score) best = { f, score };
   }
   return best && best.score >= 5 ? best.f : null;
@@ -182,7 +214,7 @@ export function recipeNutrition(recipe: Recipe, servings = recipe.servings, food
   const missing = rows.filter((r) => (!r.food || r.grams === null) && !(r.ingredient.quantity === undefined && /to taste/i.test(r.ingredient.note ?? "")));
   return {
     total,
-    perServing: scaleNutrients(total, 1 / Math.max(1, servings)),
+    perServing: scaleNutrients(total, 1 / (servings > 0 ? servings : 1)),
     rows,
     missing,
     coverage: weighed > 0 ? counted / weighed : 0,

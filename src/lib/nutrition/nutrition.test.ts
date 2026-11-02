@@ -42,9 +42,78 @@ describe("ingredientGrams", () => {
     expect(ingredientGrams({ name: "crushed tomatoes", quantity: 1, unit: "tin" })?.grams).toBe(400);
     expect(ingredientGrams({ name: "eggs", quantity: 2, quantityMax: 4 })?.grams).toBe(150);
   });
+  it("doesn't confuse ml with litres, or eggplant with eggs", () => {
+    expect(ingredientGrams({ name: "coconut milk", quantity: 1, unit: "tin", note: "400ml" })?.grams).toBe(400);
+    expect(ingredientGrams({ name: "stock", quantity: 1, unit: "pack", note: "1 L" })?.grams).toBe(1000);
+    expect(ingredientGrams({ name: "eggplant", quantity: 1 })?.grams).toBe(400);
+  });
+  it("treats a weight note on loose items as the total", () => {
+    expect(ingredientGrams({ name: "chicken thighs", quantity: 4, note: "about 600g" })?.grams).toBe(600);
+    expect(ingredientGrams({ name: "sausages", quantity: 4, note: "100g each" })?.grams).toBe(400);
+  });
   it("gives up when it can't tell", () => {
     expect(ingredientGrams({ name: "salt", note: "to taste" })).toBeNull();
     expect(ingredientGrams({ name: "mystery thing", quantity: 1 })).toBeNull();
+  });
+});
+
+const AFCD_LIKE: FoodComposition[] = [
+  "Milk, goat, fluid",
+  "Milk, cow, fluid, regular fat (~3.5%)",
+  "Onion, spring, raw",
+  "Onion, brown, peeled, raw",
+  "Sugar, brown",
+  "Sugar, white, granulated or caster",
+  "Cheese, parmesan",
+  "Cheese, cream, plain",
+  "Butter, plain, salted",
+  "Bean, butter, canned, drained",
+  "Grape, red, raw",
+  "Wine, red",
+  "Stock, chicken, liquid",
+  "Stock, vegetable, liquid",
+  "Olive, green, in brine",
+  "Apple, red skin, unpeeled, raw",
+  "Egg, chicken, white (albumen), raw",
+  "Egg, chicken, whole, raw",
+  "Noodle, egg, dry",
+  "Garlic, peeled, raw",
+  "Chicken, thigh, lean flesh, raw",
+  "Eggplant, peeled, raw",
+  "Tomato, canned, whole, no added salt",
+].map((name, i) => ({ key: `F${i}`, name, n: { energyKj: 100 } }));
+const nameOf = (ing: string) => matchFood(ing, AFCD_LIKE)?.name ?? null;
+
+describe("matchFood on AFCD-style names", () => {
+  it.each([
+    ["milk", "Milk, cow, fluid, regular fat (~3.5%)"],
+    ["whole milk", "Milk, cow, fluid, regular fat (~3.5%)"],
+    ["onion", "Onion, brown, peeled, raw"],
+    ["spring onions", "Onion, spring, raw"],
+    ["caster sugar", "Sugar, white, granulated or caster"],
+    ["brown sugar", "Sugar, brown"],
+    ["cream cheese", "Cheese, cream, plain"],
+    ["butter beans", "Bean, butter, canned, drained"],
+    ["butter", "Butter, plain, salted"],
+    ["red wine", "Wine, red"],
+    ["vegetable stock", "Stock, vegetable, liquid"],
+    ["olives", "Olive, green, in brine"],
+    ["apples", "Apple, red skin, unpeeled, raw"],
+    ["egg whites", "Egg, chicken, white (albumen), raw"],
+    ["eggs", "Egg, chicken, whole, raw"],
+    ["egg noodles", "Noodle, egg, dry"],
+    ["garlic cloves, crushed", "Garlic, peeled, raw"],
+    ["chicken thighs, skin off", "Chicken, thigh, lean flesh, raw"],
+    ["boneless chicken thighs", "Chicken, thigh, lean flesh, raw"],
+    ["tinned tomatoes", "Tomato, canned, whole, no added salt"],
+    ["minced garlic", "Garlic, peeled, raw"],
+    ["aubergine", "Eggplant, peeled, raw"],
+  ])("%s → %s", (ing, food) => {
+    expect(nameOf(ing)).toBe(food);
+  });
+  it("doesn't guess from one shared word", () => {
+    expect(nameOf("red capsicum")).toBeNull();
+    expect(nameOf("sour cream")).toBeNull();
   });
 });
 

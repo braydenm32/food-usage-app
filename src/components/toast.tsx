@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { STORAGE_FULL_EVENT, useLarder } from "@/lib/store";
+import { useCookTimers } from "@/lib/cook-timers";
 
 export interface ToastAction {
   label: string;
@@ -127,6 +128,8 @@ function ToastView({ t }: { t: Toast }) {
   const hide = useToasts((s) => s.hide);
   const rehost = useToasts((s) => s.rehost);
   const canUndo = !!t.undoId && t.undoId === currentUndoId;
+  // Sit above the cooking timer pill when one is showing.
+  const timerPill = useCookTimers((s) => s.timers.length > 0);
 
   // Enter the top layer so the toast sits above any open sheet.
   useEffect(() => {
@@ -175,7 +178,7 @@ function ToastView({ t }: { t: Toast }) {
       ref={ref}
       popover="manual"
       aria-live={t.tone === "error" ? "assertive" : "polite"}
-      className="pointer-events-none fixed inset-x-0 top-auto bottom-[calc(7.5rem+env(safe-area-inset-bottom))] z-[60] m-0 flex h-auto w-full max-w-none justify-center overflow-visible border-0 bg-transparent p-0 px-4 lg:bottom-8"
+      className={`pointer-events-none fixed inset-x-0 top-auto ${timerPill ? "bottom-[calc(9.5rem+env(safe-area-inset-bottom))] lg:bottom-24" : "bottom-[calc(7.5rem+env(safe-area-inset-bottom))] lg:bottom-8"} z-[60] m-0 flex h-auto w-full max-w-none justify-center overflow-visible border-0 bg-transparent p-0 px-4`}
     >
       <div
         role={t.tone === "error" ? "alert" : "status"}

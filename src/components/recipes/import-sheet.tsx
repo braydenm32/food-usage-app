@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Camera, CircleAlert, Link2, Loader2 } from "lucide-react";
+import { Camera, CircleAlert, Link2, Loader2, TriangleAlert, X } from "lucide-react";
 import { Button, Field, Input, Segmented, Sheet } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { downscaleImage } from "@/components/add/image";
@@ -15,7 +15,7 @@ type Mode = "link" | "photo";
 type State = { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string } | { kind: "done"; recipe: Recipe; method: string };
 
 /** Lines we probably misread, so the preview can flag them before saving. */
-const looksOff = (name: string) => /^[(/x×\d]/i.test(name) || name.length < 2;
+const looksOff = (name: string) => /^(?:[(/]|[x×]\s|\d(?!0\b))/i.test(name.trim()) || /^\d+(?:[./]\d+)?$/.test(name.trim()) || name.trim().length < 2;
 
 /**
  * Save a recipe from a web link or a photo. Shows a preview first so nothing lands unseen.
@@ -113,6 +113,11 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
   const duplicate = preview?.sourceUrl ? saved.find((r) => r.sourceUrl === preview.sourceUrl) : undefined;
   const flagged = preview ? preview.ingredients.filter((i) => looksOff(i.name)).length : 0;
 
+  function removeIngredient(index: number) {
+    if (state.kind !== "done") return;
+    setState({ ...state, recipe: { ...state.recipe, ingredients: state.recipe.ingredients.filter((_, i) => i !== index) } });
+  }
+
   function save() {
     if (!preview) return;
     const recipe: Recipe = { ...preview, title: title.trim() || preview.title, tbspMl: tbsp === "15" ? 15 : 20 };
@@ -152,9 +157,15 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
             <Link2 size={20} aria-hidden /> Import
           </Button>
         ) : (
-          <Button block size="lg" onClick={() => fileRef.current?.click()} disabled={aiReady === false}>
-            <Camera size={20} aria-hidden /> Take or choose a photo
-          </Button>
+          aiReady === false ? (
+            <Button block size="lg" variant="secondary" onClick={() => setMode("link")}>
+              <Link2 size={20} aria-hidden /> Use a link instead
+            </Button>
+          ) : (
+            <Button block size="lg" onClick={() => fileRef.current?.click()}>
+              <Camera size={20} aria-hidden /> Take or choose a photo
+            </Button>
+          )
         )
       }
     >
@@ -174,7 +185,17 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
               <img src={preview.image} alt="" className="h-20 w-20 shrink-0 rounded-2xl bg-surface-2 object-cover" />
             )}
             <div className="min-w-0 flex-1">
-              <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}</Field>
+              <Field label="Title">
+                {(id) => (
+                  <textarea
+                    id={id}
+                    value={title}
+                    rows={2}
+                    onChange={(e) => setTitle(e.target.value.replace(/\n/g, " "))}
+                    className="w-full resize-none rounded-2xl border border-line bg-surface px-4 py-2.5 text-base text-ink outline-none focus:border-primary focus:outline-none"
+                  />
+                )}
+              </Field>
             </div>
           </div>
           <p className="text-sm text-ink-2">
@@ -197,13 +218,32 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
           )}
           <div>
             <h3 className="mb-1.5 text-sm font-semibold text-ink">Ingredients</h3>
-            <ul className="max-h-56 space-y-1 overflow-y-auto rounded-2xl bg-surface-2 p-3 text-[15px]">
-              {preview.ingredients.map((ing, i) => (
-                <li key={i} className={looksOff(ing.name) ? "text-spoiled" : undefined}>
-                  <span className="text-ink-2">{formatAmount(ing.quantity, ing.unit, ing.quantityMax)}</span> {ing.name}
-                  {ing.note && <span className="text-ink-3">, {ing.note}</span>}
-                </li>
-              ))}
+            <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-2xl bg-surface-2 px-3 text-[15px]">
+              {preview.ingredients.map((ing, i) => {
+                const off = looksOff(ing.name);
+                return (
+                  <li key={i} className="flex items-center gap-2 py-1">
+                    <span className="min-w-0 flex-1">
+                      {off && (
+                        <span className="mr-1.5 inline-flex items-center gap-1 rounded-full bg-soon-soft px-2 py-0.5 align-middle text-xs font-semibold text-ink">
+                          <TriangleAlert size={12} aria-hidden /> Check
+                        </span>
+                      )}
+                      <span className="text-ink-2">{formatAmount(ing.quantity, ing.unit, ing.quantityMax)}</span> <span className="text-ink">{ing.name}</span>
+                      {ing.note && <span className="text-ink-3">, {ing.note}</span>}
+                      {ing.optional && <span className="text-ink-3"> (optional)</span>}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeIngredient(i)}
+                      aria-label={`Remove ${ing.name}`}
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-ink-3 hover:bg-surface hover:text-ink"
+                    >
+                      <X size={18} aria-hidden />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
           {preview.steps.length > 0 && (
@@ -220,7 +260,7 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
             <p className="flex items-start gap-2 text-sm text-ink-2">
               <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
               {flagged > 0
-                ? `${flagged} ${flagged === 1 ? "line looks" : "lines look"} misread. Save, then tap Edit on the recipe to fix ${flagged === 1 ? "it" : "them"}.`
+                ? `${flagged} ${flagged === 1 ? "line may be" : "lines may be"} misread. Remove ${flagged === 1 ? "it" : "them"} here, or save and tap Edit on the recipe to fix the wording.`
                 : "Read by the AI helper, so check the amounts. You can tap Edit on the recipe after saving."}
             </p>
           )}
@@ -272,9 +312,14 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
             }}
           />
           {state.kind === "error" && (
-            <p role="alert" className="rounded-2xl bg-spoiled-soft p-3 text-sm text-ink">
-              {state.message}
-            </p>
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-x-3 rounded-2xl bg-spoiled-soft p-3 text-sm text-ink">
+              <span>{state.message}</span>
+              {mode === "link" && url.trim() && (
+                <button type="button" onClick={() => importLink()} className="inline-flex min-h-11 items-center font-semibold text-primary hover:underline">
+                  Try again
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

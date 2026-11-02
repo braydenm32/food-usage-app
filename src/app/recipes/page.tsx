@@ -239,7 +239,7 @@ function RecipesView() {
               title="Import a recipe"
               className="inline-flex h-11 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-primary transition-colors hover:bg-surface-2"
             >
-              <Download size={20} aria-hidden /> <span className="hidden sm:inline">Import</span>
+              <Download size={20} aria-hidden /> Import
             </button>
             {plannerOn ? (
             <Link

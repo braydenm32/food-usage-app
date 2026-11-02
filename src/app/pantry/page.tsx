@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpDown, ChartPie, ChevronDown, Search, X } from "lucide-react";
+import { ArrowUpDown, CalendarDays, ChartPie, ChevronDown, Search, X } from "lucide-react";
 import { useLarder } from "@/lib/store";
 import { useItemViews, type ItemView } from "@/lib/selectors";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -21,7 +21,7 @@ type SortMode = "use-first" | "calendar" | "az" | "recent";
 const SORT_KEY = "larder-pantry-sort";
 const SORTS: { value: SortMode; label: string }[] = [
   { value: "use-first", label: "Use first" },
-  { value: "calendar", label: "Calendar" },
+  { value: "calendar", label: "Calendar view" },
   { value: "az", label: "A–Z" },
   { value: "recent", label: "Newest" },
 ];
@@ -338,8 +338,12 @@ function Group({
 function SortSelect({ value, onChange }: { value: SortMode; onChange: (v: SortMode) => void }) {
   return (
     <label className="relative inline-flex h-12 shrink-0 items-center rounded-2xl border border-line bg-surface text-ink-2 focus-within:border-primary hover:text-ink">
-      <span className="sr-only">Sort by</span>
-      <ArrowUpDown size={17} aria-hidden className="pointer-events-none absolute left-3 sm:left-3.5" />
+      <span className="sr-only">Sort or view</span>
+      {value === "calendar" ? (
+        <CalendarDays size={17} aria-hidden className="pointer-events-none absolute left-3 sm:left-3.5" />
+      ) : (
+        <ArrowUpDown size={17} aria-hidden className="pointer-events-none absolute left-3 sm:left-3.5" />
+      )}
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as SortMode)}

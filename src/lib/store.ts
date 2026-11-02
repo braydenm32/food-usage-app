@@ -638,6 +638,8 @@ export const useLarder = create<LarderState>()(
                   ((e.foodTypeId && l.foodTypeId === e.foodTypeId) || l.name.toLowerCase() === e.name.toLowerCase()),
               );
               if (existing) {
+                // The same recipe asking again (a second tap on "Add to list") shouldn't double it.
+                if (e.recipeId && existing.recipeId === e.recipeId) continue;
                 // Same thing again: add the amounts together when the units allow (1 egg + 2 eggs = 3).
                 const sum = addAmounts(existing, e);
                 if (sum) {

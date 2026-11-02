@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BellRing, ChefHat, ChevronLeft, ChevronRight, Pause, Play, Plus, Timer, X } from "lucide-react";
+import { BellRing, ChefHat, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pause, Play, Plus, Timer, X } from "lucide-react";
 import { Button, IconButton } from "@/components/ui";
 import { askTimerNotifications, secondsLeft, unlockAlarm, useCookTimers } from "@/lib/cook-timers";
 import { formatAmount, scaleIngredient } from "@/lib/recipes/quantity";
@@ -123,6 +123,11 @@ export function CookMode({
 
   const go = (to: number) => setStep(Math.max(0, Math.min(last, to)));
   const touch = useRef<{ x: number; y: number } | null>(null);
+  const [overview, setOverview] = useState(false);
+  const stepHint = (i: number) => {
+    const words = (steps[i] ?? "").split(/\s+/).slice(0, 4).join(" ");
+    return words ? `${words}…` : "";
+  };
 
   return (
     <dialog
@@ -140,10 +145,16 @@ export function CookMode({
           <header className="flex items-center justify-between gap-3 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))]">
             <div className="min-w-0">
               <p className="truncate text-sm text-ink-2">{recipe.title}</p>
-              <p className="font-semibold text-ink">
-                Step {at + 1} of {steps.length}
-                {awake && <span className="ml-2 text-xs font-normal text-ink-3">Screen stays on</span>}
-              </p>
+              <button
+                type="button"
+                aria-expanded={overview}
+                onClick={() => setOverview((v) => !v)}
+                className="-ml-1 inline-flex min-h-11 items-center gap-1 rounded-full px-1 font-semibold text-ink hover:text-primary"
+              >
+                {overview ? "All steps and ingredients" : `Step ${at + 1} of ${steps.length}`}
+                {overview ? <ChevronUp size={18} aria-hidden /> : <ChevronDown size={18} aria-hidden />}
+              </button>
+              {awake && <span className="ml-2 text-xs font-normal text-ink-3">Screen stays on</span>}
             </div>
             <IconButton label="Close cook mode (timers keep running)" onClick={onClose}>
               <X size={22} />
@@ -180,6 +191,42 @@ export function CookMode({
               if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(at + (dx < 0 ? 1 : -1));
             }}
           >
+            {overview ? (
+              <div>
+                <h2 className="mb-2 text-sm font-semibold text-ink-2">Ingredients</h2>
+                <ul className="mb-6 space-y-1 text-[17px]">
+                  {recipe.ingredients.map((ing, i) => {
+                    const s = scaleIngredient(ing, factor);
+                    return (
+                      <li key={i}>
+                        <span className="font-semibold">{formatAmount(s.quantity, s.unit, s.quantityMax)}</span> {ing.name}
+                        {ing.note && <span className="text-ink-3">, {ing.note}</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <h2 className="mb-2 text-sm font-semibold text-ink-2">Steps</h2>
+                <ol className="space-y-1">
+                  {steps.map((st, i) => (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOverview(false);
+                          go(i);
+                        }}
+                        aria-current={i === at ? "step" : undefined}
+                        className={`flex w-full gap-3 rounded-2xl p-3 text-left text-[15px] ${i === at ? "bg-primary-soft text-ink" : "text-ink-2 hover:bg-surface-2"}`}
+                      >
+                        <span className="font-semibold text-ink">{i + 1}</span>
+                        <span className="line-clamp-2">{st}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : (
+            <>
             <p ref={headingRef} tabIndex={-1} className="font-display text-[1.65rem] leading-snug text-ink outline-none lg:text-4xl">
               {current}
             </p>
@@ -210,10 +257,12 @@ export function CookMode({
                 </ul>
               </section>
             )}
+            </>
+            )}
           </main>
 
           {running.length > 0 && (
-            <ul className="space-y-2 px-4 pb-2" aria-label="Timers">
+            <ul className="max-h-[40dvh] space-y-2 overflow-y-auto px-4 pb-2" aria-label="Timers">
               {running.map((t) => (
                 <li key={t.id} className="flex items-center gap-2 rounded-2xl border border-line bg-surface py-1 pl-4 pr-1">
                   <Timer size={18} className="shrink-0 text-ink-3" aria-hidden />
@@ -221,8 +270,8 @@ export function CookMode({
                     <span className="font-mono text-2xl leading-tight tabular-nums" role="timer" aria-label={`${t.label} timer, step ${t.step + 1}`}>
                       {formatClock(secondsLeft(t, now))}
                     </span>
-                    <span className="truncate text-xs text-ink-2">
-                      Step {t.step + 1}
+                    <span className="truncate text-xs text-ink-2" title={stepHint(t.step)}>
+                      {t.label}, step {t.step + 1}
                       {t.endsAt !== null ? ` · rings ${endTime(t.endsAt)}` : " · paused"}
                     </span>
                   </span>

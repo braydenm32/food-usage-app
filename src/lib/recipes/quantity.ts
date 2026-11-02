@@ -27,7 +27,15 @@ export function formatAmount(quantity: number | undefined, unit?: string, quanti
   const q = quantityMax !== undefined && quantityMax > quantity ? `${formatQty(quantity)}–${formatQty(quantityMax)}` : formatQty(quantity);
   if (!unit || unit === "item") return q;
   if (/^(g|kg|ml|L)$/.test(unit)) return `${q}${unit}`;
-  return `${q} ${unit}`;
+  return `${q} ${Math.max(quantity, quantityMax ?? 0) > 1 ? pluralUnit(unit) : unit}`;
+}
+
+/** "2 tins", "3 cloves", "2 bunches"; spoons and metric units stay as they are. */
+function pluralUnit(unit: string): string {
+  if (!/^(tin|can|jar|pack|packet|bunch|clove|slice|cup|sprig|handful|stick|pinch|punnet|bottle|head|fillet|sheet|piece|rasher|stalk|leaf)$/.test(unit)) return unit;
+  if (/(ch|sh)$/.test(unit)) return `${unit}es`;
+  if (unit === "leaf") return "leaves";
+  return `${unit}s`;
 }
 
 export function scaleIngredient(ing: RecipeIngredient, factor: number): RecipeIngredient {

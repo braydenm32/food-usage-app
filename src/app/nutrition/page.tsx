@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Copy, Download, Pin, PinOff, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Button, Card, EmptyState, Field, IconButton, Input, PageHeader, SectionTitle, Segmented, Sheet, buttonClass, cx } from "@/components/ui";
@@ -30,7 +30,12 @@ const RANGES: { value: Range; label: string }[] = [
   { value: "90", label: "Quarter" },
 ];
 
-const daysAgo = (now: number, n: number) => toLocalISODate(new Date(now - n * 86_400_000));
+/** Local date n calendar days back (safe across daylight-saving changes). */
+const daysAgo = (now: number, n: number) => {
+  const d = new Date(now);
+  d.setDate(d.getDate() - n);
+  return toLocalISODate(d);
+};
 
 export default function NutritionPage() {
   const hydrated = useHydrated();
@@ -44,6 +49,8 @@ export default function NutritionPage() {
   const [range, setRange] = useState<Range>("today");
   const [focus, setFocus] = useState<NutrientKey>("protein");
   const [targetsOpen, setTargetsOpen] = useState(false);
+  const [showMicros, setShowMicros] = useState(false);
+  const sourcesRef = useRef<HTMLDivElement>(null);
 
   const today = toLocalISODate(new Date(now));
   const from = range === "today" ? today : daysAgo(now, Number(range) - 1);
@@ -60,12 +67,12 @@ export default function NutritionPage() {
   if (!hydrated) return <PageHeader title="Nutrition" subtitle={<span className="invisible">Loading</span>} actions={back} />;
 
   const perDay = range !== "today";
-  const label = perDay ? `Daily average · ${days} ${days === 1 ? "day" : "days"} logged` : "Today so far";
+  const label = perDay ? `Average per day, on the ${days} of ${range} days you logged meals` : "Today so far";
 
   async function copyText(text: string, what: string) {
     try {
       await navigator.clipboard.writeText(text);
-      toast(`Copied ${what}. Paste or type it into Quick Add in MacroFactor or MyFitnessPal.`);
+      toast(`Copied ${what} for Quick Add`);
     } catch {
       toast("Couldn't copy. Try again.", { tone: "error" });
     }
@@ -86,8 +93,16 @@ export default function NutritionPage() {
     toast(`Removed ${m.title}`, { action: { label: "Undo", onClick: () => restoreMeal(m) } });
   }
 
-  const togglePin = (k: NutrientKey) =>
-    setPinned(pinned.includes(k) ? pinned.filter((x) => x !== k) : pinned.length >= 8 ? pinned : [...pinned, k]);
+  function togglePin(k: NutrientKey) {
+    if (pinned.includes(k)) return setPinned(pinned.filter((x) => x !== k));
+    if (pinned.filter((x) => x !== "energyKj").length >= 8) return toast("You can pin up to 8. Unpin one first.");
+    setPinned([...pinned, k]);
+  }
+
+  function showSources(k: NutrientKey) {
+    setFocus(k);
+    sourcesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   return (
     <>
@@ -127,8 +142,16 @@ export default function NutritionPage() {
                 <p className="font-display text-4xl text-ink">{kcal(avg.energyKj) ?? 0} Cal</p>
                 <p className="text-sm text-ink-2">{formatNutrient(avg.energyKj, "kJ")}</p>
               </div>
-              <TargetBar value={avg.energyKj} target={targets.energyKj} unit="kJ" />
-              {days === 0 && <p className="mt-2 text-sm text-ink-3">Nothing logged in this range.</p>}
+              <TargetBar
+                value={kcal(avg.energyKj)}
+                target={targets.energyKj && { min: kcal(targets.energyKj.min), goal: kcal(targets.energyKj.goal), max: kcal(targets.energyKj.max) }}
+                unit="Cal"
+              />
+              {days === 0 && (
+                <p className="mt-2 text-sm text-ink-3">
+                  {range === "today" ? "Nothing logged today yet. Tap “I cooked this” on a recipe to add a meal." : "Nothing logged in this range."}
+                </p>
+              )}
             </Card>
 
             <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Pinned nutrients">
@@ -150,7 +173,9 @@ export default function NutritionPage() {
                 ))}
             </ul>
 
-            <SectionTitle>Where your {NUTRIENT[focus].label.toLowerCase()} came from</SectionTitle>
+            <div ref={sourcesRef} className="mt-8 scroll-mt-4">
+              <SectionTitle>Where your {NUTRIENT[focus].label.toLowerCase()} came from</SectionTitle>
+            </div>
             {contributors.length === 0 ? (
               <p className="text-sm text-ink-3">No {NUTRIENT[focus].label.toLowerCase()} logged in this range.</p>
             ) : (
@@ -169,14 +194,23 @@ export default function NutritionPage() {
               </Card>
             )}
 
-            <SectionTitle>All nutrients</SectionTitle>
+            <SectionTitle
+              action={
+                <button type="button" aria-expanded={showMicros} onClick={() => setShowMicros((v) => !v)} className="inline-flex min-h-11 items-center text-sm font-semibold text-primary hover:underline">
+                  {showMicros ? "Hide vitamins and minerals" : "Show vitamins and minerals"}
+                </button>
+              }
+            >
+              All nutrients
+            </SectionTitle>
+            <p className="-mt-1 mb-2 text-xs text-ink-3">Tap a name to see where it came from. Pin up to 8 to the top.</p>
             <Card>
               <ul className="divide-y divide-line">
-                {NUTRIENTS.map((x) => {
+                {NUTRIENTS.filter((x) => showMicros || x.group !== "micro" || x.key === "sodium").map((x) => {
                   const st = targetState(avg[x.key], targets[x.key]);
                   return (
                     <li key={x.key} className="flex items-center gap-2 py-1 pl-4 pr-1 text-[15px]">
-                      <button type="button" onClick={() => setFocus(x.key)} className="min-h-11 min-w-0 flex-1 truncate text-left text-ink">
+                      <button type="button" onClick={() => showSources(x.key)} className="min-h-11 min-w-0 flex-1 truncate text-left text-ink">
                         {x.label}
                       </button>
                       <span className={cx("tabular-nums", st === "under" ? "text-soon" : st === "over" ? "text-spoiled" : "text-ink-2")}>
@@ -184,9 +218,13 @@ export default function NutritionPage() {
                         {st === "under" && <span className="sr-only"> (under your minimum)</span>}
                         {st === "over" && <span className="sr-only"> (over your maximum)</span>}
                       </span>
-                      <IconButton label={pinned.includes(x.key) ? `Unpin ${x.label}` : `Pin ${x.label}`} onClick={() => togglePin(x.key)} aria-pressed={pinned.includes(x.key)}>
-                        {pinned.includes(x.key) ? <PinOff size={18} /> : <Pin size={18} />}
-                      </IconButton>
+                      {x.key === "energyKj" ? (
+                        <span className="w-11" aria-hidden />
+                      ) : (
+                        <IconButton label={pinned.includes(x.key) ? `Unpin ${x.label}` : `Pin ${x.label}`} onClick={() => togglePin(x.key)} aria-pressed={pinned.includes(x.key)}>
+                          {pinned.includes(x.key) ? <PinOff size={18} className="text-primary" /> : <Pin size={18} />}
+                        </IconButton>
+                      )}
                     </li>
                   );
                 })}
@@ -284,21 +322,31 @@ function TargetsSheet({ open, onClose }: { open: boolean; onClose: () => void })
   return (
     <Sheet open={open} onClose={onClose} title="Daily targets" wide footer={<Button block size="lg" onClick={onClose}>Done</Button>}>
       <p className="pb-3 text-sm text-ink-2">
-        All optional. Set a minimum, a goal or a maximum for any nutrient, per day. Use the numbers your dietitian, doctor or app gives you.
+        All optional, per day, and saved as you type. Use the numbers your dietitian, doctor or app gives you.
       </p>
       <ul className="divide-y divide-line">
         {NUTRIENTS.map((x) => {
-          const t = targets[x.key] ?? {};
-          const set = (patch: Partial<Target>) => setTarget(x.key, { ...t, ...patch });
+          // Energy targets are entered in Calories, like the rest of the screen, and stored in kJ.
+          const isEnergy = x.key === "energyKj";
+          const stored = targets[x.key] ?? {};
+          const t: Target = isEnergy
+            ? { min: kcal(stored.min), goal: kcal(stored.goal), max: kcal(stored.max) }
+            : stored;
+          const toStored = (v: number | undefined) => (v === undefined || !isEnergy ? v : Math.round(v * 4.184));
+          const set = (patch: Partial<Target>) => {
+            const next = { ...stored };
+            for (const [k, v] of Object.entries(patch) as [keyof Target, number | undefined][]) next[k] = toStored(v);
+            setTarget(x.key, next);
+          };
           return (
             <li key={x.key} className="py-3">
               <p className="mb-1.5 font-medium text-ink">
-                {x.label} <span className="text-sm font-normal text-ink-3">({x.unit})</span>
+                {x.label} <span className="text-sm font-normal text-ink-3">({isEnergy ? "Calories" : x.unit})</span>
               </p>
               <div className="grid grid-cols-3 gap-2">
                 {(["min", "goal", "max"] as const).map((k) => (
                   <Field key={k} label={k === "min" ? "Min" : k === "goal" ? "Goal" : "Max"}>
-                    {(id) => <Input id={id} inputMode="decimal" defaultValue={t[k] ?? ""} onBlur={(e) => set({ [k]: num(e.target.value) })} />}
+                    {(id) => <Input id={id} inputMode="decimal" defaultValue={t[k] ?? ""} onChange={(e) => set({ [k]: num(e.target.value) })} />}
                   </Field>
                 ))}
               </div>

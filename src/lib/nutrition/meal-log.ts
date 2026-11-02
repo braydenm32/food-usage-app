@@ -41,6 +41,8 @@ interface MealLogState {
   restoreMeal: (m: MealEntry) => void;
   setTarget: (key: NutrientKey, t: Target | undefined) => void;
   setPinned: (keys: NutrientKey[]) => void;
+  /** Forget everything (used by "Erase everything"). */
+  clear: () => void;
 }
 
 const newId = () => `meal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -71,6 +73,7 @@ export const useMealLog = create<MealLogState>()(
           return { targets };
         }),
       setPinned: (keys) => set({ pinned: keys }),
+      clear: () => set({ meals: [], targets: {}, pinned: ["energyKj", "protein", "carbs", "fat", "fibre"] }),
     }),
     { name: "larder-meal-log", storage: createJSONStorage(() => localStorage), version: 1 },
   ),
@@ -124,12 +127,12 @@ export function targetState(value: number | undefined, t: Target | undefined): "
  * Neither app has an open API, so this is copied and pasted (or typed) in.
  */
 export function quickAddText(label: string, n: Nutrients): string {
-  const r = (v?: number) => (v === undefined ? "0" : String(Math.round(v)));
+  const r = (v?: number) => (v === undefined ? "?" : String(Math.round(v)));
   return [
     label,
     `Calories: ${kcal(n.energyKj) ?? 0} kcal (${r(n.energyKj)} kJ)`,
     `Protein: ${r(n.protein)} g`,
-    `Carbs: ${r(n.carbs)} g`,
+    `Carbs: ${r(n.carbs)} g (not including fibre)`,
     `Fat: ${r(n.fat)} g`,
     `Fibre: ${r(n.fibre)} g`,
     `Sugars: ${r(n.sugars)} g`,
@@ -138,8 +141,10 @@ export function quickAddText(label: string, n: Nutrients): string {
 }
 
 const csvCell = (v: string | number | undefined) => {
-  const s = v === undefined ? "" : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = v === undefined ? "" : String(v);
+  // Stop a recipe title like "=HYPERLINK(...)" running as a formula in Excel.
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 /** One row per meal, every tracked nutrient as a column. Opens in Excel, Numbers or Sheets. */
@@ -152,5 +157,6 @@ export function mealsCsv(meals: MealEntry[]): string {
       const time = new Date(m.at).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
       return [m.date, time, m.title, m.servings, kcal(t.energyKj), ...NUTRIENTS.map((n) => (t[n.key] === undefined ? undefined : Math.round(t[n.key]! * 10) / 10))];
     });
-  return [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
+  // Byte-order mark so Excel reads "µg" and accented titles as UTF-8.
+  return "\uFEFF" + [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
 }

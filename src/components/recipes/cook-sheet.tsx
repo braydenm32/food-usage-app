@@ -66,13 +66,15 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
   // Nutrition: log how many servings you ate (only when the food database is in this build).
   const logMeal = useMealLog((s) => s.logMeal);
   const removeMeal = useMealLog((s) => s.removeMeal);
-  const canLog = hasFoodData() && recipe.ingredients.length > 0;
+  // Only offer logging when we could actually work out some nutrition for this recipe.
+  const nutrition = useMemo(() => (hasFoodData() ? recipeNutrition(recipe, recipe.servings) : null), [recipe]);
+  const canLog = !!nutrition && nutrition.rows.some((r) => r.food && r.grams) && nutrition.coverage >= 0.5;
   const [logIt, setLogIt] = useState(canLog);
   const [ate, setAte] = useState(1);
 
   function logEaten(): string | null {
-    if (!canLog || !logIt || ate <= 0) return null;
-    const nut = recipeNutrition(recipe, recipe.servings);
+    if (!canLog || !nutrition || !logIt || ate <= 0) return null;
+    const nut = nutrition;
     const per = 1 / Math.max(1, recipe.servings);
     const now = new Date();
     return logMeal({
@@ -88,7 +90,7 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
 
   function confirm() {
     const mealId = logEaten();
-    const logged = mealId ? ` Logged ${ate} serving${ate === 1 ? "" : "s"}.` : "";
+    const logged = mealId ? `Logged ${ate} serving${ate === 1 ? "" : "s"}` : "";
     const parts = changed.map((r) => {
       const left = Math.round((r.item.quantity - (amounts[r.item.id] ?? 0)) * 1000) / 1000;
       return left <= 0 ? `${r.item.name} used up` : `${r.item.name}: ${formatQuantity(left, r.item.unit)} left`;
@@ -116,7 +118,22 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
         leftovers,
       );
       const tail = leftovers ? `Leftovers saved in the fridge for ${leftoverDays} days` : "";
-      toast([summary, tail].filter(Boolean).join(". ") + logged, { undoable: true });
+      const message = [summary, tail, logged].filter(Boolean).join(". ");
+      if (mealId) {
+        // One Undo puts back the larder and takes the meal off the log.
+        const undoId = useLarder.getState().undo?.id;
+        toast(message, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              if (undoId) useLarder.getState().performUndo(undoId);
+              removeMeal(mealId);
+            },
+          },
+        });
+      } else {
+        toast(message, { undoable: true });
+      }
     } else if (mealId) {
       toast(`Logged ${ate} serving${ate === 1 ? "" : "s"} of ${recipe.title}`, { action: { label: "Undo", onClick: () => removeMeal(mealId) } });
     } else {
@@ -125,29 +142,46 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
     onClose();
   }
 
+  const willLog = canLog && logIt && ate > 0;
+  const actions = [
+    changed.length > 0 ? `update ${changed.length} ${changed.length === 1 ? "item" : "items"}` : "",
+    saveLeftovers ? "save leftovers" : "",
+    willLog ? `log ${ate} ${ate === 1 ? "serving" : "servings"}` : "",
+  ].filter(Boolean);
+  const footerLabel = actions.length
+    ? (actions.length > 1 ? `${actions.slice(0, -1).join(", ")} and ${actions[actions.length - 1]}` : actions[0]).replace(/^./, (c) => c.toUpperCase())
+    : "Done, change nothing";
+
   return (
     <Sheet
       open={open}
       onClose={onClose}
-      title="What did you use?"
+      title="Finished cooking?"
       footer={
         <Button block size="lg" onClick={confirm}>
-          {changed.length > 0
-            ? `Update ${changed.length} ${changed.length === 1 ? "item" : "items"}${saveLeftovers ? " and save leftovers" : ""}`
-            : saveLeftovers
-              ? "Save leftovers"
-              : "Done, change nothing"}
+          {footerLabel}
         </Button>
       }
     >
+      {canLog && (
+        <section aria-label="Nutrition" className="mb-2 border-b border-line">
+          <Switch checked={logIt} onChange={setLogIt} label="Log what I ate" description="Adds it to today's nutrition. Only on this device." />
+          {logIt && (
+            <div className="flex items-center justify-between gap-3 pb-3">
+              <span className="text-[15px] text-ink-2">Servings I ate</span>
+              <Stepper label="servings eaten" value={ate} step={0.5} min={0.5} onChange={(v) => setAte(Math.max(0.5, v))} />
+            </div>
+          )}
+        </section>
+      )}
       {rows.length === 0 ? (
         <p className="py-6 text-[15px] text-ink-2">
-          Nothing in your larder matches this recipe, so there is nothing to take off. Enjoy your meal.
+          Nothing in your larder matches this recipe, so there is nothing to take off.
         </p>
       ) : (
         <>
           <p className="mb-3 text-sm text-ink-2">
-            We have guessed amounts from the recipe. Adjust anything that is off and we will update your larder.
+            We&apos;ve estimated what you used from the recipe. Adjust anything that&apos;s off and we&apos;ll update your larder.
           </p>
           <ul className="divide-y divide-line">
             {rows.map(({ use, item }) => {
@@ -200,17 +234,6 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
             })}
           </ul>
         </>
-      )}
-      {canLog && (
-        <div className="mt-2 border-t border-line">
-          <Switch checked={logIt} onChange={setLogIt} label="Log what I ate" description="Adds it to your nutrition for today. Only on this device." />
-          {logIt && (
-            <div className="flex items-center justify-between gap-3 pb-3">
-              <span className="text-[15px] text-ink-2">Servings I ate</span>
-              <Stepper label="servings eaten" value={ate} step={0.5} min={0.5} onChange={(v) => setAte(Math.max(0.5, v))} />
-            </div>
-          )}
-        </div>
       )}
       <div className="mt-2 border-t border-line">
         <Switch

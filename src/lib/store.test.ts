@@ -193,3 +193,19 @@ describe("normalisePersisted", () => {
     expect(normalisePersisted(null).shoppingList).toEqual([]);
   });
 });
+
+describe("addToList merging", () => {
+  beforeEach(() => s().resetAll());
+  it("adds amounts for the same food from different places", () => {
+    s().addToList([{ name: "Eggs", foodTypeId: null, quantity: 2, unit: "item" }]);
+    s().addToList([{ name: "Eggs", foodTypeId: null, quantity: 1, unit: "item" }]);
+    expect(s().shoppingList).toHaveLength(1);
+    expect(s().shoppingList[0].quantity).toBe(3);
+  });
+  it("doesn't double up when the same recipe adds again", () => {
+    const e = { name: "Beef mince", foodTypeId: null, quantity: 500, unit: "g", recipeId: "r1", reason: "recipe" as const };
+    s().addToList([e]);
+    s().addToList([e]);
+    expect(s().shoppingList[0].quantity).toBe(500);
+  });
+});

@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, ExternalLink, Pencil, Timer, ShoppingBasket, Users, ChefHat } from "lucide-react";
+import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, ExternalLink, Pencil, Timer, ShoppingBasket, Users, ChefHat, Trash2 } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, SectionTitle, Sheet, Stepper, buttonClass, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
 import { toast } from "@/components/toast";
@@ -204,14 +204,19 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <Users size={16} aria-hidden /> Serves
             <Stepper label="servings" value={servings} min={1} onChange={(v) => setServings(Math.max(1, Math.round(v)))} />
-            <span className="whitespace-nowrap text-sm text-ink-3">Recipe serves {recipe.servings}</span>
-            {servings !== recipe.servings && (
-              <button type="button" className="inline-flex h-11 items-center whitespace-nowrap text-sm font-medium text-primary hover:underline" onClick={() => setServings(recipe.servings)}>
-                Use {recipe.servings}
-              </button>
-            )}
           </div>
         </div>
+        {servings !== recipe.servings && (
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 rounded-2xl bg-surface-2 px-3 text-sm text-ink-2">
+            <span className="py-2">
+              Scaled from {recipe.servings} to {servings}
+              {servings === defaultPeople ? " for your household" : ""}.
+            </span>
+            <button type="button" className="inline-flex min-h-11 items-center whitespace-nowrap font-semibold text-primary hover:underline" onClick={() => setServings(recipe.servings)}>
+              Use the recipe&apos;s {recipe.servings}
+            </button>
+          </p>
+        )}
         {recipe.tags.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Tags">
             {recipe.tags.slice(0, 6).map((t) => (
@@ -222,19 +227,19 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           </ul>
         )}
 
-        <div className="mt-6 flex flex-wrap gap-2">
+        <div className="mt-6 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           {recipe.steps.length > 0 && (
-            <Button size="lg" onClick={() => setCookModeOpen(true)} className="w-full sm:w-auto">
+            <Button size="lg" onClick={() => setCookModeOpen(true)} className="col-span-2 sm:w-auto">
               {timerCount > 0 ? <Timer size={20} aria-hidden /> : <CookingPot size={20} aria-hidden />} {timerCount > 0 ? "Back to cooking" : "Start cooking"}
             </Button>
           )}
-          <Button size="lg" variant={recipe.steps.length > 0 ? "secondary" : "primary"} onClick={() => setCookOpen(true)} className={recipe.steps.length > 0 ? "" : "w-full sm:w-auto"}>
+          <Button size="lg" variant={recipe.steps.length > 0 ? "secondary" : "primary"} onClick={() => setCookOpen(true)} className={recipe.steps.length > 0 ? "" : "col-span-2 sm:w-auto"}>
             <ChefHat size={20} aria-hidden /> I cooked this
           </Button>
           <Button
             variant="secondary"
             size="lg"
-            aria-pressed={isSaved}
+            aria-pressed={recipe.id.startsWith("imp-") ? undefined : isSaved}
             onClick={() => {
               if (isSaved) {
                 unsaveRecipe(recipe.id);
@@ -251,7 +256,19 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
               }
             }}
           >
-            {isSaved ? <BookmarkCheck size={20} aria-hidden /> : <Bookmark size={20} aria-hidden />} {isSaved ? "Saved" : "Save"}
+            {isSaved && recipe.id.startsWith("imp-") ? (
+              <>
+                <Trash2 size={18} aria-hidden /> Delete
+              </>
+            ) : isSaved ? (
+              <>
+                <BookmarkCheck size={20} aria-hidden /> Saved
+              </>
+            ) : (
+              <>
+                <Bookmark size={20} aria-hidden /> Save
+              </>
+            )}
           </Button>
           {editable && (
             <Button variant="secondary" size="lg" onClick={() => setEditOpen(true)}>

@@ -67,7 +67,7 @@ export function ExpiryCalendar({
     picked === "past"
       ? "Already past their date"
       : picked === "later"
-        ? "Later"
+        ? "Later on"
         : picked === todayIso
           ? "Today"
           : new Date(`${picked}T00:00`).toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" });
@@ -88,7 +88,10 @@ export function ExpiryCalendar({
           <span>{past.length}</span>
         </button>
       )}
-      <div className="grid grid-cols-7 gap-1 text-center" role="grid" aria-label="Use-by calendar">
+      <p className="mb-2 text-sm font-semibold text-ink-2">
+        {days[0].toLocaleDateString("en-AU", { day: "numeric", month: "short" })} – {days[days.length - 1].toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+      </p>
+      <div className="grid grid-cols-7 gap-1 text-center" aria-label="Use-by calendar">
         {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
           <span key={i} className="pb-1 text-xs font-medium text-ink-3" aria-hidden>
             {d}
@@ -115,7 +118,7 @@ export function ExpiryCalendar({
                 iso === todayIso && picked !== iso && "ring-1 ring-primary/40",
               )}
             >
-              <span>{d.getDate()}</span>
+              <span>{d.getDate() === 1 ? d.toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : d.getDate()}</span>
               {list.length > 0 && (
                 <span className="mt-0.5 flex items-center gap-0.5 text-[11px] font-semibold leading-none text-ink-2">
                   <span aria-hidden className={cx("h-1.5 w-1.5 rounded-full", worst && DOT[worst])} />
@@ -127,8 +130,17 @@ export function ExpiryCalendar({
         })}
       </div>
       {later.length > 0 && (
-        <button type="button" onClick={() => setPicked("later")} className="mt-2 min-h-11 text-sm font-medium text-primary hover:underline">
-          {later.length} more after that
+        <button
+          type="button"
+          onClick={() => setPicked("later")}
+          aria-pressed={picked === "later"}
+          className={cx(
+            "mt-3 flex min-h-11 w-full items-center justify-between rounded-2xl px-4 text-left text-sm font-semibold",
+            picked === "later" ? "bg-primary text-primary-ink" : "bg-surface-2 text-ink",
+          )}
+        >
+          <span>After {days[days.length - 1].toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
+          <span>{later.length}</span>
         </button>
       )}
 
@@ -138,7 +150,7 @@ export function ExpiryCalendar({
           <span className="font-normal text-ink-3">{pickedViews.length}</span>
         </h2>
         {pickedViews.length === 0 ? (
-          <p className="py-3 text-sm text-ink-3">Nothing runs out that day.</p>
+          <p className="py-3 text-sm text-ink-3">{picked === todayIso ? "Nothing runs out today." : "Nothing runs out that day."}</p>
         ) : (
           <ul className="-mx-2 flex flex-col">
             {pickedViews.map((v) => (

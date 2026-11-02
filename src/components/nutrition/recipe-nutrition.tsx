@@ -19,12 +19,15 @@ export function RecipeNutritionCard({ recipe }: { recipe: Recipe }) {
   const n = useMemo(() => (hasFoodData() ? recipeNutrition(recipe) : null), [recipe]);
   if (!n || n.rows.every((r) => !r.food)) return null;
   const p = n.perServing;
+  const show = (k: NutrientKey) => (p[k] === undefined ? "n/a" : formatNutrient(p[k], NUTRIENT[k].unit));
+  const anyGaps = [...MAIN, ...SECOND].some((k) => p[k] === undefined);
+  const lowCoverage = n.coverage < 0.8;
   const micros = NUTRIENTS.filter((x) => x.group === "micro" && x.key !== "sodium" && p[x.key] !== undefined);
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(quickAddText(`${recipe.title} (1 serving)`, p));
-      toast("Copied. Paste or type it into Quick Add in MacroFactor or MyFitnessPal.");
+      toast("Copied for Quick Add");
     } catch {
       toast("Couldn't copy. Try again.", { tone: "error" });
     }
@@ -34,8 +37,13 @@ export function RecipeNutritionCard({ recipe }: { recipe: Recipe }) {
     <section aria-labelledby="nutrition-h" className="mt-8">
       <SectionTitle
         action={
-          <button type="button" onClick={copy} className="inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold text-primary hover:underline">
-            <Copy size={16} aria-hidden /> Copy for MacroFactor / MFP
+          <button
+            type="button"
+            onClick={copy}
+            aria-label="Copy for MacroFactor or MyFitnessPal"
+            className="inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap text-sm font-semibold text-primary hover:underline"
+          >
+            <Copy size={16} aria-hidden /> Copy macros
           </button>
         }
       >
@@ -45,12 +53,15 @@ export function RecipeNutritionCard({ recipe }: { recipe: Recipe }) {
         <div className="flex flex-wrap items-baseline gap-x-3">
           <p className="font-display text-3xl text-ink">{kcal(p.energyKj) ?? "–"} Cal</p>
           <p className="text-sm text-ink-2">{formatNutrient(p.energyKj, "kJ")}</p>
+          {lowCoverage && (
+            <p className="rounded-full bg-soon-soft px-2.5 py-0.5 text-xs font-semibold text-ink">Partial: {Math.round(n.coverage * 100)}% of the recipe matched</p>
+          )}
         </div>
         <dl className="mt-3 grid grid-cols-4 gap-2 text-center">
           {MAIN.map((k) => (
             <div key={k} className="rounded-2xl bg-surface-2 px-1 py-2">
               <dt className="text-xs text-ink-2">{NUTRIENT[k].label}</dt>
-              <dd className="font-semibold tabular-nums text-ink">{formatNutrient(p[k], NUTRIENT[k].unit)}</dd>
+              <dd className="font-semibold tabular-nums text-ink">{show(k)}</dd>
             </div>
           ))}
         </dl>
@@ -58,7 +69,7 @@ export function RecipeNutritionCard({ recipe }: { recipe: Recipe }) {
           {SECOND.map((k) => (
             <div key={k} className="flex gap-1">
               <dt>{NUTRIENT[k].label}</dt>
-              <dd className="font-semibold tabular-nums text-ink">{formatNutrient(p[k], NUTRIENT[k].unit)}</dd>
+              <dd className="font-semibold tabular-nums text-ink">{show(k)}</dd>
             </div>
           ))}
         </dl>
@@ -83,6 +94,7 @@ export function RecipeNutritionCard({ recipe }: { recipe: Recipe }) {
 
         <p className={cx("mt-3 text-xs", n.coverage < 0.8 || n.missing.length ? "text-ink-2" : "text-ink-3")}>
           Estimated from the Australian Food Composition Database (FSANZ).
+          {anyGaps && " n/a means the database doesn't list that nutrient for these foods."}
           {n.missing.length > 0 && ` Leaves out ${n.missing.map((m) => m.ingredient.name.toLowerCase()).join(", ")}.`}{" "}
           <button type="button" aria-expanded={showWorking} onClick={() => setShowWorking((v) => !v)} className="inline-flex min-h-11 items-center font-medium text-primary hover:underline">
             {showWorking ? "Hide the working" : "How we worked this out"}
