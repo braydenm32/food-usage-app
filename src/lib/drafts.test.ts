@@ -151,6 +151,13 @@ describe("isLikelyNonFood", () => {
   it("leaves food alone", () => {
     for (const t of ["Full cream milk 2L", "Baby spinach 120g", "Bread rolls"]) expect(isLikelyNonFood(t), t).toBe(false);
   });
+
+  it("does not flag foods whose names contain a non-food word", () => {
+    for (const t of ["Lipton tea bags 100pk", "Bag of ice 5kg", "Lolly bag", "Steam bag potatoes", "Sponge cake", "Zucchini flowers"]) {
+      expect(isLikelyNonFood(t), t).toBe(false);
+    }
+    for (const t of ["Reusable bag", "Kitchen sponge 3pk", "Flowers bunch"]) expect(isLikelyNonFood(t), t).toBe(true);
+  });
 });
 
 describe("parseLocalList", () => {

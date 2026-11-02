@@ -191,8 +191,12 @@ const ADMIN_PATTERNS: RegExp[] = [
   /\bitems? (purchased|in order|ordered)\b/,
 ];
 
+/** Food names that contain a non-food word ("tea bags", "bag of ice", "sponge cake", "zucchini flowers"). */
+const FOOD_PHRASES =
+  /\b(?:tea ?bags?|bags? of ice|ice bags?|lolly bags?|steam ?bags?|sponge (?:cakes?|rolls?|fingers?)|cream sponge|(?:zucchini|squash|courgette) (?:flowers?|blossoms?))\b/g;
+
 export function isLikelyNonFood(text: string): boolean {
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().replace(FOOD_PHRASES, " ");
   return NON_FOOD_PATTERNS.some((r) => r.test(t)) || ADMIN_PATTERNS.some((r) => r.test(t));
 }
 
