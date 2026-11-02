@@ -25,5 +25,7 @@ describe("cleanEnv", () => {
     expect(cleanEnv('  "abc-DEF_123"\n')).toBe("abc-DEF_123");
     expect(cleanEnv("'mailto:a@b.com' ")).toBe("mailto:a@b.com");
     expect(cleanEnv("plain")).toBe("plain");
+    expect(cleanEnv("VAPID_PRIVATE_KEY=abc_123")).toBe("abc_123");
+    expect(cleanEnv('NEXT_PUBLIC_VAPID_PUBLIC_KEY="BAbc-1"')).toBe("BAbc-1");
   });
 });
