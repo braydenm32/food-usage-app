@@ -38,14 +38,19 @@ export function missingPushEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   return needed.filter((k) => !env[k]);
 }
 
+/** Pasted env values often carry spaces, newlines or quotes; the push keys must be exact. */
+export function cleanEnv(v: string): string {
+  return v.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+}
+
 export function pushConfig(env: NodeJS.ProcessEnv = process.env): PushConfig | null {
   if (missingPushEnv(env).length) return null;
   return {
     supabaseUrl: env.NEXT_PUBLIC_SUPABASE_URL!,
     serviceKey: env.SUPABASE_SERVICE_ROLE_KEY!,
-    vapidPublic: env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-    vapidPrivate: env.VAPID_PRIVATE_KEY!,
-    vapidSubject: env.VAPID_SUBJECT!,
+    vapidPublic: cleanEnv(env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
+    vapidPrivate: cleanEnv(env.VAPID_PRIVATE_KEY!),
+    vapidSubject: cleanEnv(env.VAPID_SUBJECT!),
   };
 }
 
@@ -77,6 +82,9 @@ export function digestPayload(d: Digest): PushPayload {
 
 type SendResult = "sent" | "gone" | "failed";
 
+/** Why the last failed send failed, for logs and the test route (never includes keys). */
+export let lastSendError: { status?: number; message: string } | null = null;
+
 export async function sendPush(cfg: PushConfig, row: Pick<SubscriptionRow, "endpoint" | "p256dh" | "auth">, payload: PushPayload): Promise<SendResult> {
   // Never post anywhere but a browser push service (the row could have been written by anyone signed in).
   if (!isAllowedPushEndpoint(row.endpoint)) return "gone";
@@ -93,6 +101,11 @@ export async function sendPush(cfg: PushConfig, row: Pick<SubscriptionRow, "endp
   } catch (e) {
     // 404/410: the browser unsubscribed or the subscription expired.
     if (e instanceof WebPushError && (e.statusCode === 404 || e.statusCode === 410)) return "gone";
+    lastSendError =
+      e instanceof WebPushError
+        ? { status: e.statusCode, message: String(e.body || e.message).slice(0, 300) }
+        : { message: e instanceof Error ? e.message.slice(0, 300) : "Unknown error" };
+    console.error("[push] send failed", new URL(row.endpoint).host, lastSendError);
     return "failed";
   }
 }
