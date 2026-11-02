@@ -3,32 +3,21 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ClipboardPaste, CookingPot, Leaf, PencilLine, Receipt, Sparkles, X } from "lucide-react";
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useState } from "react";
 import { useLarder } from "@/lib/store";
-import type { Diet } from "@/lib/types";
-import { Button, Chip, Input, Stepper, cx } from "@/components/ui";
+import { Button, cx } from "@/components/ui";
+import { FreshnessBar, StatusPill } from "@/components/freshness";
 
-const DIETS: Array<{ value: Diet; label: string }> = [
-  { value: "vegetarian", label: "Vegetarian" },
-  { value: "vegan", label: "Vegan" },
-  { value: "pescatarian", label: "Pescatarian" },
-  { value: "gluten-free", label: "Gluten-free" },
-  { value: "dairy-free", label: "Dairy-free" },
-  { value: "low-carb", label: "Low-carb" },
-  { value: "halal", label: "Halal" },
-  { value: "kosher", label: "Kosher" },
-];
+const STEPS = ["What Larder does", "How to start"];
 
-const STEPS = ["What Larder does", "Your household", "How to start"];
+/** Reminders only "remind" when background push is set up on this install. */
+const PUSH_ON = Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY);
 
 export default function WelcomePage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const profile = useLarder((s) => s.profile);
-  const setProfile = useLarder((s) => s.setProfile);
   const setSettings = useLarder((s) => s.setSettings);
   const loadDemoData = useLarder((s) => s.loadDemoData);
-  const [allergyDraft, setAllergyDraft] = useState("");
   // Whether photo reading is set up on this install. Until we know, assume it is.
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
 
@@ -50,20 +39,17 @@ export default function WelcomePage() {
     router.push(to);
   };
 
-  const addAllergy = () => {
-    const v = allergyDraft.trim();
-    if (!v) return;
-    if (!profile.allergies.some((a) => a.toLowerCase() === v.toLowerCase())) {
-      setProfile({ allergies: [...profile.allergies, v] });
-    }
-    setAllergyDraft("");
-  };
-  const onAllergyKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" || e.key === ",") {
-      e.preventDefault();
-      addAllergy();
-    }
-  };
+  const aiOn = aiConfigured !== false;
+  const intro = PUSH_ON
+    ? "Larder keeps a quiet eye on your fridge, freezer and pantry. It estimates when things will turn, reminds you before they do, and turns what's left into dinner."
+    : "Larder keeps a quiet eye on your fridge, freezer and pantry. It estimates when things will turn, shows you what to eat first, and turns what's left into dinner.";
+  const points = [
+    aiOn
+      ? { Icon: Receipt, tint: "bg-primary-soft text-primary", text: "Add a whole shop from a receipt in seconds" }
+      : { Icon: ClipboardPaste, tint: "bg-primary-soft text-primary", text: "Paste an order or list and it sorts itself" },
+    { Icon: Leaf, tint: "bg-fresh-soft text-fresh", text: "See what to use today, honestly estimated" },
+    { Icon: CookingPot, tint: "bg-soon-soft text-soon", text: "Get recipes for what's about to turn" },
+  ];
 
   return (
     <div className="flex min-h-dvh flex-col bg-paper">
@@ -91,7 +77,7 @@ export default function WelcomePage() {
                 key={label}
                 className={cx(
                   "h-1.5 rounded-full transition-all",
-                  i === step ? "w-6 bg-primary" : i < step ? "w-2.5 bg-primary/50" : "w-2.5 bg-line",
+                  i === step ? "w-6 bg-primary" : i < step ? "w-2.5 bg-primary/50" : "w-2.5 bg-control-line",
                 )}
               />
             ))}
@@ -113,24 +99,20 @@ export default function WelcomePage() {
       </div>
 
       {/* A div, not <main>: the app shell already provides the page's main landmark. */}
-      <div className="flex flex-1 flex-col px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] lg:mx-auto lg:w-full lg:max-w-xl lg:px-0">
+      <div className="flex flex-1 flex-col px-5 lg:mx-auto lg:w-full lg:max-w-xl lg:px-0">
         {step === 0 && (
-          <section aria-labelledby="w-step-1" className="flex flex-1 flex-col justify-center py-10">
-            <h1 id="w-step-1" className="font-display text-[2.6rem] leading-[1.05] text-ink sm:text-[3.4rem] lg:text-[4rem]">
+          <section aria-labelledby="w-step-1" className="flex flex-1 flex-col pb-6 pt-8">
+            <h1 id="w-step-1" className="font-display text-[2.4rem] leading-[1.05] text-ink sm:text-[3.2rem] lg:text-[3.6rem]">
               Know what&apos;s in your kitchen, <span className="text-primary">what to eat first</span>, and what to cook
               with it.
             </h1>
-            <p className="mt-6 max-w-md text-[17px] leading-relaxed text-ink-2">
-              Larder keeps a quiet eye on your fridge, freezer and pantry. It estimates when things will turn, nudges you
-              before they do, and turns what&apos;s left into dinner.
-            </p>
-            <ul className="mt-8 grid gap-3 text-[15px] text-ink-2 sm:grid-cols-3">
-              {[
-                { Icon: Receipt, tint: "bg-primary-soft text-primary", text: "Add a whole shop from a receipt in seconds" },
-                { Icon: Leaf, tint: "bg-fresh-soft text-fresh", text: "See what to use today, honestly estimated" },
-                { Icon: CookingPot, tint: "bg-soon-soft text-soon", text: "Get recipes for what's about to turn" },
-              ].map(({ Icon, tint, text }) => (
-                <li key={text} className="flex items-center gap-3 rounded-2xl bg-surface p-3 sm:flex-col sm:items-start">
+            <p className="mt-5 max-w-md text-[17px] leading-relaxed text-ink-2">{intro}</p>
+
+            <FreshnessPreview />
+
+            <ul className="mt-6 grid gap-2 text-[15px] text-ink-2 sm:grid-cols-3">
+              {points.map(({ Icon, tint, text }) => (
+                <li key={text} className="flex items-center gap-3 rounded-2xl p-1 sm:flex-col sm:items-start">
                   <span aria-hidden className={cx("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", tint)}>
                     <Icon size={20} />
                   </span>
@@ -138,110 +120,12 @@ export default function WelcomePage() {
                 </li>
               ))}
             </ul>
-            <div className="mt-10">
-              <Button size="lg" block onClick={() => setStep(1)}>
-                Let&apos;s set it up
-              </Button>
-              <p className="mt-3 text-center text-xs text-ink-3">Nothing leaves your device. No account needed.</p>
-            </div>
           </section>
         )}
 
         {step === 1 && (
-          <section aria-labelledby="w-step-2" className="flex flex-1 flex-col py-8">
+          <section aria-labelledby="w-step-2" className="flex flex-1 flex-col pt-8">
             <h1 id="w-step-2" className="font-display text-[2rem] leading-tight text-ink lg:text-[2.5rem]">
-              Who&apos;s eating?
-            </h1>
-            <p className="mt-2 text-[15px] text-ink-2">
-              This sizes recipes and keeps suggestions sensible. You can change it any time in Settings.
-            </p>
-
-            <div className="mt-8 flex items-center justify-between gap-4 rounded-2xl bg-surface p-4">
-              <div>
-                <p className="text-[15px] font-medium text-ink">People in the household</p>
-                <p className="text-sm text-ink-2">Including little ones.</p>
-              </div>
-              <Stepper value={profile.people} onChange={(v) => setProfile({ people: v })} min={1} label="people" />
-            </div>
-
-            <div className="mt-6">
-              <p className="mb-2 text-sm font-medium text-ink-2">Ways of eating, if any</p>
-              <div className="flex flex-wrap gap-2">
-                {DIETS.map((d) => {
-                  const on = profile.diets.includes(d.value);
-                  return (
-                    <Chip
-                      key={d.value}
-                      selected={on}
-                      onClick={() =>
-                        setProfile({ diets: on ? profile.diets.filter((x) => x !== d.value) : [...profile.diets, d.value] })
-                      }
-                    >
-                      {d.label}
-                    </Chip>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <label htmlFor="w-allergy" className="mb-2 block text-sm font-medium text-ink-2">
-                Allergies, if any
-              </label>
-              {profile.allergies.length > 0 && (
-                <ul className="mb-2 flex flex-wrap gap-1.5" aria-label="Allergies added">
-                  {profile.allergies.map((a) => (
-                    <li
-                      key={a}
-                      className="inline-flex h-8 items-center gap-1 rounded-full bg-surface-2 pl-3 pr-1 text-sm font-medium text-ink"
-                    >
-                      {a}
-                      <button
-                        type="button"
-                        aria-label={`Remove ${a}`}
-                        onClick={() => setProfile({ allergies: profile.allergies.filter((x) => x !== a) })}
-                        className="flex h-6 w-6 items-center justify-center rounded-full text-ink-3 hover:bg-line hover:text-ink"
-                      >
-                        <X size={13} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="flex gap-2">
-                <Input
-                  id="w-allergy"
-                  value={allergyDraft}
-                  onChange={(e) => setAllergyDraft(e.target.value)}
-                  onKeyDown={onAllergyKey}
-                  onBlur={addAllergy}
-                  placeholder="Peanuts, shellfish, egg…"
-                  autoComplete="off"
-                />
-                <Button variant="secondary" onClick={addAllergy} disabled={!allergyDraft.trim()} className="shrink-0">
-                  Add
-                </Button>
-              </div>
-            </div>
-
-            <div className="mt-auto pt-10">
-              <Button size="lg" block onClick={() => setStep(2)}>
-                Next
-              </Button>
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className="mt-2 flex h-11 w-full items-center justify-center rounded-full text-sm font-medium text-ink-2 hover:bg-surface-2"
-              >
-                Skip this for now
-              </button>
-            </div>
-          </section>
-        )}
-
-        {step === 2 && (
-          <section aria-labelledby="w-step-3" className="flex flex-1 flex-col py-8">
-            <h1 id="w-step-3" className="font-display text-[2rem] leading-tight text-ink lg:text-[2.5rem]">
               How do you want to start?
             </h1>
             <p className="mt-2 text-[15px] text-ink-2">Pick one. The others are always a tap away from the Add button.</p>
@@ -294,12 +178,56 @@ export default function WelcomePage() {
               </button>
             </div>
 
-            <p className="mt-auto pt-10 text-center text-xs text-ink-3">
+            <p className="mt-auto pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-10 text-center text-xs text-ink-3">
               Dates are estimates from Australian food-safety guidance. Printed use-by dates and your own senses always win.
             </p>
           </section>
         )}
       </div>
+
+      {step === 0 && (
+        // Pinned to the safe-area bottom so the call to action is always in thumb reach.
+        <div className="sticky bottom-0 bg-paper/90 px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-md lg:mx-auto lg:w-full lg:max-w-xl lg:px-0">
+          <Button size="lg" block onClick={() => setStep(1)}>
+            Get started
+          </Button>
+          <p className="mt-3 text-center text-xs text-ink-3">Nothing leaves your device. No account needed.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A small, static freshness card built from the real components, so the first screen shows the product. */
+function FreshnessPreview() {
+  const rows = [
+    { name: "Baby spinach", where: "Fridge", status: "use-today" as const, label: "Use today", fraction: 0.1 },
+    { name: "Chicken thighs", where: "Fridge", status: "use-soon" as const, label: "2 days left", fraction: 0.35 },
+    { name: "Greek yoghurt", where: "Fridge", status: "fresh" as const, label: "9 days left", fraction: 0.85 },
+  ];
+  return (
+    <div
+      role="img"
+      aria-label="Example: baby spinach to use today, chicken thighs with 2 days left, Greek yoghurt with 9 days left"
+      className="mt-7 rounded-[var(--radius-card)] border border-line bg-surface p-4 shadow-card"
+    >
+      <p aria-hidden className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-3">
+        Eat first
+      </p>
+      <ul aria-hidden className="flex flex-col gap-3.5">
+        {rows.map((r) => (
+          <li key={r.name}>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <span className="min-w-0">
+                <span className="block text-[15px] font-semibold text-ink">{r.name}</span>
+                <span className="block text-xs text-ink-3">{r.where}</span>
+              </span>
+              <StatusPill status={r.status}>{r.label}</StatusPill>
+            </div>
+            <FreshnessBar status={r.status} fraction={r.fraction} />
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
