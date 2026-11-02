@@ -100,7 +100,7 @@ export interface PantryItem {
    */
   expiredWhenFrozen?: boolean;
   /** Where the item came from. */
-  source: "receipt" | "list" | "barcode" | "manual" | "order";
+  source: "receipt" | "list" | "barcode" | "manual" | "order" | "putaway";
   barcode?: string;
   notes?: string;
 }

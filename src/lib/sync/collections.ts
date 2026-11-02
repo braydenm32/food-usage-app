@@ -122,7 +122,7 @@ function pick(data: Obj, checks: Record<string, (v: unknown) => boolean>): Obj {
 }
 
 const isDateKind = oneOf("use-by", "best-before");
-const isItemSource = oneOf("receipt", "list", "barcode", "manual", "order");
+const isItemSource = oneOf("receipt", "list", "barcode", "manual", "order", "putaway");
 const isEventType = oneOf("added", "opened", "moved", "used", "binned", "edited", "cooked");
 const isLocationKind = oneOf("pantry", "fridge", "freezer");
 const isRecipeSource = oneOf("ai", "database", "saved", "builtin");
