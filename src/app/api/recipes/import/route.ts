@@ -118,6 +118,9 @@ export async function POST(req: Request) {
     return fail(400, "bad_url", "That doesn't look like a web link. Paste the full address of the recipe page.");
   }
 
+  // Only suggest a photo when photos can actually be read here.
+  const client = getAnthropic();
+  const fallback = client ? "import a screenshot of it as a photo" : "write it in yourself";
   let page: { html: string; url: string };
   try {
     page = await safeFetchPage(url);
@@ -127,22 +130,21 @@ export async function POST(req: Request) {
       code === "blocked"
         ? "That link points somewhere Larder can't open. Use the recipe's public web address."
         : code === "timeout"
-          ? "That site took too long to answer. Try again, or import a screenshot as a photo."
+          ? `That site took too long to answer. Try again, or ${fallback}.`
           : code === "http" && (e as SafeFetchError).status === 404
             ? "That page wasn't found. Check the link is complete."
             : code === "http" && [401, 403, 429].includes((e as SafeFetchError).status ?? 0)
-              ? "That site blocks other apps from reading its pages. Take a screenshot and import it as a photo instead."
+              ? `That site blocks other apps from reading its pages. You can ${fallback} instead.`
               : code === "not_html"
                 ? "That link isn't a web page. Paste the link to the recipe itself."
-                : "Couldn't open that page. Check the link, or import a screenshot as a photo instead.";
+                : `Couldn't open that page. Check the link, or ${fallback} instead.`;
     return fail(422, "fetch_failed", message);
   }
 
   const recipe = recipeFromHtml(page.html, page.url);
   if (recipe) return NextResponse.json({ recipe, method: "page-data" });
 
-  const client = getAnthropic();
-  if (!client) return fail(422, "no_recipe_data", "That page doesn't share its recipe in a standard way. Try a screenshot of it as a photo once the AI helper is set up.");
+  if (!client) return fail(422, "no_recipe_data", "That page doesn't share its recipe in a standard way, so Larder can't read it. You can write it in yourself.");
   try {
     const r = await aiExtract(client, `Page: ${page.url}\n\n${pageText(page.html)}`);
     if (!r) return fail(422, "no_recipe", "Couldn't find a recipe on that page.");

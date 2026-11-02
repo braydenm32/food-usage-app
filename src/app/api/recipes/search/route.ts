@@ -44,7 +44,9 @@ function mapMeal(m: MealFull): Recipe {
     // TheMealDB's terms ask apps to name it as the source of its data and images.
     credit: { name: "TheMealDB", url: `https://www.themealdb.com/meal/${m.idMeal}` },
     image: m.strMealThumb,
+    // TheMealDB doesn't say how many a meal serves.
     servings: 4,
+    servingsEstimated: true,
     ingredients,
     steps: splitSteps(m.strInstructions ?? ""),
     tags: [...new Set(tags)],
@@ -59,11 +61,16 @@ export async function GET(req: Request) {
   const limit = Math.min(Number(searchParams.get("limit")) || 6, 10);
 
   try {
-    if (id) {
+    if (id !== null) {
+      const notFound = () => NextResponse.json({ error: "not_found", message: "That recipe wasn't found." }, { status: 404 });
+      if (!/^\d{1,10}$/.test(id)) return notFound();
       const data = await getJson<{ meals: MealFull[] | null }>(`${BASE}/lookup.php?i=${encodeURIComponent(id)}`);
       const meal = data?.meals?.[0];
-      if (!meal) return NextResponse.json({ error: "not_found", message: "That recipe wasn't found." }, { status: 404 });
-      return NextResponse.json({ recipes: [mapMeal(meal)] });
+      if (!meal) return notFound();
+      const recipe = mapMeal(meal);
+      // A meal with no ingredient list or method isn't a recipe anyone can cook.
+      if (recipe.ingredients.length === 0 || recipe.steps.length === 0) return notFound();
+      return NextResponse.json({ recipes: [recipe] });
     }
     if (!ing) return NextResponse.json({ error: "bad_request", message: "Add an ingredient to search for." }, { status: 400 });
 

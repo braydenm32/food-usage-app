@@ -2,7 +2,7 @@
 // Pure functions only, so they run on the server route and in tests.
 
 import type { Recipe, RecipeIngredient } from "@/lib/types";
-import { foodTypeIdFor, slugId } from "./map";
+import { foodTypeIdFor, localiseText, slugId } from "./map";
 
 /* ---------- ingredient lines ---------- */
 
@@ -267,18 +267,7 @@ function stepsOf(v: Json): string[] {
     }
   };
   walk(v);
-  return out.map(toCelsius);
-}
-
-function imageOf(v: Json): string | undefined {
-  for (const i of asArray(v as Json[])) {
-    if (typeof i === "string" && /^https?:\/\//.test(i)) return i;
-    if (i && typeof i === "object") {
-      const u = (i as Record<string, Json>).url;
-      if (typeof u === "string" && /^https?:\/\//.test(u)) return u;
-    }
-  }
-  return undefined;
+  return out.map((step) => localiseText(toCelsius(step)));
 }
 
 function tagsOf(node: Record<string, Json>): string[] {
@@ -327,7 +316,7 @@ export function recipeFromHtml(html: string, url?: string): Recipe | null {
       summary: text(node.description).slice(0, 300) || undefined,
       servings: servingsOf(node.recipeYield),
       minutes: durationMinutes(node.totalTime) ?? sumMinutes(durationMinutes(node.prepTime), durationMinutes(node.cookTime)),
-      image: imageOf(node.image),
+      // The page's photo belongs to the site: not stored, so it isn't hotlinked on every view.
       ingredients,
       steps,
       tags: tagsOf(node),

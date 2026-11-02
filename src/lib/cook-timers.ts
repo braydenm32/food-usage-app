@@ -83,6 +83,11 @@ export function unlockAlarm() {
   }
 }
 
+/** Whether a timer can make a sound right now. After a reload the browser needs another tap first. */
+export function alarmReady(): boolean {
+  return !!ctx && ctx.state === "running";
+}
+
 /** Three short beeps. Safe to call repeatedly; silent when audio isn't available. */
 export function beep() {
   if (!ctx) return;

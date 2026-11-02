@@ -5,7 +5,8 @@ import { Button, Sheet, Stepper, Switch, cx } from "@/components/ui";
 import { StatusPill } from "@/components/freshness";
 import { toast } from "@/components/toast";
 import { useLarder } from "@/lib/store";
-import { defaultDeduction, formatAmount, stepFor, tbspOf } from "@/lib/recipes/quantity";
+import { formatAmount, planDeductions, stepFor } from "@/lib/recipes/quantity";
+import { ingredientMatchesItem } from "@/lib/recipes/suggest";
 import { formatQuantity } from "@/components/pantry/format";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { storageDays } from "@/lib/shelf-life/engine";
@@ -23,6 +24,8 @@ interface Props {
   uses: RecipeUse[];
   /** servings scale factor applied on the detail page */
   factor: number;
+  /** Called after the larder (or meal log) was updated, e.g. to tick off a planned meal. */
+  onCooked?: () => void;
 }
 
 export function CookSheet(props: Props) {
@@ -37,25 +40,25 @@ const QUICK: Array<{ label: string; fraction: number }> = [
   { label: "All", fraction: 1 },
 ];
 
-function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
+function CookSheetInner({ open, onClose, recipe, uses, factor, onCooked }: Props) {
   const items = useLarder((s) => s.items);
   const cookRecipe = useLarder((s) => s.cookRecipe);
 
+  // One row per matched item, plus a second item when the first doesn't have enough.
+  const plan = useMemo(() => planDeductions(recipe, uses, items, factor, ingredientMatchesItem), [recipe, uses, items, factor]);
   const rows = useMemo(
     () =>
-      uses
-        .map((u) => {
-          const item = items.find((i) => i.id === u.itemId);
-          const ing = recipe.ingredients.find((i) => i.name === u.ingredient);
-          return item && ing ? { use: u, item, ing } : null;
+      plan
+        .map((d) => {
+          const item = items.find((i) => i.id === d.itemId);
+          const use = uses.find((u) => u.itemId === d.itemId);
+          return item ? { use, item, spill: !!d.spill, ingredient: d.ingredient } : null;
         })
-        .filter((r): r is { use: RecipeUse; item: PantryItem; ing: Recipe["ingredients"][number] } => r !== null),
-    [uses, items, recipe],
+        .filter((r): r is { use: RecipeUse | undefined; item: PantryItem; spill: boolean; ingredient: string } => r !== null),
+    [plan, items, uses],
   );
 
-  const [amounts, setAmounts] = useState<Record<string, number>>(() =>
-    Object.fromEntries(rows.map((r) => [r.item.id, defaultDeduction(r.ing, r.item, factor, tbspOf(recipe))])),
-  );
+  const [amounts, setAmounts] = useState<Record<string, number>>(() => Object.fromEntries(plan.map((d) => [d.itemId, d.amount])));
 
   const changed = rows.filter((r) => (amounts[r.item.id] ?? 0) > 0);
 
@@ -69,7 +72,9 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
   // Only offer logging when we could actually work out some nutrition for this recipe.
   const nutrition = useMemo(() => (hasFoodData() ? recipeNutrition(recipe, recipe.servings) : null), [recipe]);
   const canLog = !!nutrition && nutrition.rows.some((r) => r.food && r.grams) && nutrition.coverage >= 0.5;
-  const [logIt, setLogIt] = useState(canLog);
+  // Off unless this household already logs meals: most people don't track.
+  const logsMeals = useMealLog((s) => s.meals.length > 0);
+  const [logIt, setLogIt] = useState(canLog && logsMeals);
   const [ate, setAte] = useState(1);
 
   function logEaten(): string | null {
@@ -139,6 +144,7 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
     } else {
       toast("Enjoy! Nothing in your larder changed.");
     }
+    onCooked?.();
     onClose();
   }
 
@@ -181,10 +187,10 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
       ) : (
         <>
           <p className="mb-3 text-sm text-ink-2">
-            We&apos;ve estimated what you used from the recipe. Adjust anything that&apos;s off and we&apos;ll update your larder.
+            We&apos;ve estimated what you used from the recipe. Where we can&apos;t tell (a spoon of oil from a bottle), it starts at none. Adjust anything and we&apos;ll update your larder.
           </p>
           <ul className="divide-y divide-line">
-            {rows.map(({ use, item }) => {
+            {rows.map(({ use, item, spill, ingredient }) => {
               const value = amounts[item.id] ?? 0;
               const set = (v: number) => setAmounts((a) => ({ ...a, [item.id]: Math.min(item.quantity, Math.max(0, v)) }));
               return (
@@ -196,9 +202,10 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
                       </p>
                       <p className="text-sm text-ink-2">
                         {formatAmount(item.quantity, item.unit)} {item.quantity === 1 && item.unit === "item" ? "" : "in your larder"}
+                        {spill ? ` · the rest of the ${ingredient}` : ""}
                       </p>
                     </div>
-                    <StatusPill status={use.status} />
+                    {use && <StatusPill status={use.status}>{use.pastBestBefore ? "Past best before, check it" : undefined}</StatusPill>}
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <div role="group" aria-label={`How much ${item.name}`} className="flex gap-1.5">
