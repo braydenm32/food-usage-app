@@ -29,7 +29,7 @@ const Extraction = z.object({
 });
 
 export type Extraction = z.infer<typeof Extraction>;
-export type ExtractKind = "receipt" | "list" | "order";
+export type ExtractKind = "receipt" | "list" | "shelf" | "order";
 
 const SYSTEM = `You read Australian grocery receipts, shopping lists and supermarket order emails for a household food tracker.
 Return every purchased line in order. Expand receipt abbreviations into the everyday food name in Australian English
@@ -62,7 +62,9 @@ export async function extractWithClaude(
   const what =
     input.kind === "receipt"
       ? "this supermarket receipt"
-      : input.kind === "list"
+      : input.kind === "shelf"
+        ? "this photo of a fridge, freezer or pantry shelf. List each distinct food you can actually see (one line per kind of food, with a count when you can tell, e.g. 6 eggs). Only include what you can identify; skip anything hidden or unclear, and skip non-food. Read a printed date only if it is clearly legible"
+        : input.kind === "list"
         ? "this shopping list (it may be handwritten; every line is something bought or to buy, so isFood is true unless it is clearly not food)"
         : "this supermarket order confirmation email";
 

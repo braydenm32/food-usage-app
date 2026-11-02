@@ -142,3 +142,14 @@ describe("findTimers", () => {
     expect(formatClock(3725)).toBe("1:02:05");
   });
 });
+
+import { addAmounts } from "./quantity";
+describe("addAmounts", () => {
+  it("adds like units and converts g/kg, ml/L", () => {
+    expect(addAmounts({ quantity: 1, unit: "item" }, { quantity: 2, unit: "item" })).toEqual({ quantity: 3, unit: "item" });
+    expect(addAmounts({ quantity: 500, unit: "g" }, { quantity: 1, unit: "kg" })).toEqual({ quantity: 1.5, unit: "kg" });
+    expect(addAmounts({ quantity: 300, unit: "ml" }, { quantity: 200, unit: "ml" })).toEqual({ quantity: 500, unit: "ml" });
+    expect(addAmounts({}, { quantity: 2, unit: "tin" })).toEqual({ quantity: 2, unit: "tin" });
+    expect(addAmounts({ quantity: 1, unit: "bunch" }, { quantity: 200, unit: "g" })).toBeNull();
+  });
+});

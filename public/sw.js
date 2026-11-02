@@ -1,6 +1,6 @@
 // Larder service worker: offline shell + notifications.
 // Bump the version when the caching rules or shell change; old caches are deleted on activate.
-const VERSION = 3;
+const VERSION = 4;
 const CACHE = `larder-v${VERSION}`;
 const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/welcome", "/account"];
 
@@ -50,7 +50,12 @@ self.addEventListener("fetch", (event) => {
           }
           return res;
         })
-        .catch(() => caches.match(request).then((hit) => hit || caches.match("/"))),
+        // Offline: the same page (ignoring ?cook=1 and the like), else its section, else Today.
+        .catch(() =>
+          caches.match(request, { ignoreSearch: true }).then(
+            (hit) => hit || caches.match(`/${url.pathname.split("/")[1]}`).then((section) => section || caches.match("/")),
+          ),
+        ),
     );
   }
 });

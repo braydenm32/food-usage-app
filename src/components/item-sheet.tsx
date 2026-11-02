@@ -209,6 +209,13 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
         </div>
       </div>
 
+      {intent !== "still-good" && item.dateKind === "best-before" && expiry.status === "expired" && (
+        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
+          Best before is about quality, not safety. If it looks, smells and tastes fine it&apos;s usually good to eat, so
+          check before you bin it.
+        </p>
+      )}
+
       {intent === "still-good" && (
         <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
           Still looks and smells fine? Set the date on the pack, or a new date you&apos;re comfortable with. Trust your

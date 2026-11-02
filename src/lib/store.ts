@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { addAmounts } from "@/lib/recipes/quantity";
 import type {
   Aisle,
   DraftItem,
@@ -636,7 +637,15 @@ export const useLarder = create<LarderState>()(
                   !l.checked &&
                   ((e.foodTypeId && l.foodTypeId === e.foodTypeId) || l.name.toLowerCase() === e.name.toLowerCase()),
               );
-              if (existing) continue;
+              if (existing) {
+                // Same thing again: add the amounts together when the units allow (1 egg + 2 eggs = 3).
+                const sum = addAmounts(existing, e);
+                if (sum) {
+                  const i = list.indexOf(existing);
+                  list[i] = { ...existing, ...sum };
+                }
+                continue;
+              }
               const food = e.foodTypeId ? getFoodType(e.foodTypeId) : undefined;
               list.push({
                 ...e,

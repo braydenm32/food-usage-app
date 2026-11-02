@@ -14,11 +14,14 @@ import { ItemSheet } from "@/components/item-sheet";
 import { ItemRow } from "@/components/pantry/item-row";
 import { LocationIcon } from "@/components/pantry/location-icon";
 import { focusRow } from "@/components/pantry/focus";
+import { ExpiryCalendar } from "@/components/pantry/expiry-calendar";
+import { useNow } from "@/lib/use-now";
 
-type SortMode = "use-first" | "az" | "recent";
+type SortMode = "use-first" | "calendar" | "az" | "recent";
 const SORT_KEY = "larder-pantry-sort";
 const SORTS: { value: SortMode; label: string }[] = [
   { value: "use-first", label: "Use first" },
+  { value: "calendar", label: "Calendar" },
   { value: "az", label: "A–Z" },
   { value: "recent", label: "Newest" },
 ];
@@ -101,6 +104,7 @@ function Pantry() {
 
   const locParam = params.get("loc");
   const loc = locParam && locations.some((l) => l.id === locParam) ? locParam : "all";
+  const now = useNow();
   const [query, setQuery] = useState("");
   const [sort, setSortState] = useState<SortMode>(readSort);
   const setSort = (v: SortMode) => {
@@ -277,6 +281,8 @@ function Pantry() {
                     }
                   />
                 )
+              ) : sort === "calendar" ? (
+                <ExpiryCalendar views={shown} now={now} showLocation={loc === "all"} onOpen={openSheet} focusFallback={listHeading} />
               ) : sort === "use-first" ? (
                 GROUP_ORDER.map((status) => {
                   const group = shown.filter((v) => v.expiry.status === status);

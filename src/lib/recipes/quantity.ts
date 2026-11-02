@@ -92,3 +92,27 @@ function stepRound(n: number, unit: Unit): number {
 export function tbspOf(recipe: { tbspMl?: 15 | 20; source: string }): 15 | 20 {
   return recipe.tbspMl ?? (recipe.source === "database" ? 15 : 20);
 }
+
+const BASE: Record<string, [string, number]> = { g: ["g", 1], kg: ["g", 1000], ml: ["ml", 1], L: ["ml", 1000], l: ["ml", 1000] };
+
+/**
+ * Add two shopping amounts ("1 egg" + "2 eggs" = 3; "500 g" + "1 kg" = 1.5 kg).
+ * Returns null when the units can't be added, so the caller keeps both as they are.
+ */
+export function addAmounts(
+  a: { quantity?: number; unit?: string },
+  b: { quantity?: number; unit?: string },
+): { quantity?: number; unit?: string } | null {
+  if (a.quantity === undefined) return b.quantity === undefined ? a : { quantity: b.quantity, unit: b.unit ?? a.unit };
+  if (b.quantity === undefined) return a;
+  const ua = a.unit ?? "item";
+  const ub = b.unit ?? "item";
+  if (ua === ub) return { quantity: round(a.quantity + b.quantity), unit: a.unit ?? b.unit };
+  const ba = BASE[ua];
+  const bb = BASE[ub];
+  if (!ba || !bb || ba[0] !== bb[0]) return null;
+  const total = a.quantity * ba[1] + b.quantity * bb[1];
+  // Show in the bigger unit once it reaches 1000.
+  if (total >= 1000) return { quantity: round(total / 1000), unit: ba[0] === "g" ? "kg" : "L" };
+  return { quantity: round(total), unit: ba[0] };
+}

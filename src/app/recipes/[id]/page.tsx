@@ -13,14 +13,14 @@ import { EditRecipeSheet } from "@/components/recipes/edit-recipe-sheet";
 import { useCookTimers } from "@/lib/cook-timers";
 import { getBuiltinRecipe } from "@/lib/recipes/builtin";
 import { readCachedRecipe, cacheRecipes } from "@/lib/recipes/cache";
-import { formatAmount, scaleIngredient, tbspOf } from "@/lib/recipes/quantity";
+import { convertToItemUnit, formatAmount, scaleIngredient, tbspOf } from "@/lib/recipes/quantity";
 import { allergenHits, analyseRecipe, dislikeHits, exclusionReason, isStaple, stockCount } from "@/lib/recipes/suggest";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { toLocalISODate } from "@/lib/shelf-life/engine";
 import { useItemViews } from "@/lib/selectors";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
-import type { Recipe } from "@/lib/types";
+import type { PantryItem, Recipe } from "@/lib/types";
 
 export default function RecipeDetailPage() {
   return (
@@ -131,6 +131,18 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const useByIngredient = new Map(analysis.uses.map((u) => [u.ingredient, u]));
   const missingNames = new Set(analysis.missing.map((m) => m.name));
   const stock = stockCount(analysis);
+  // Ingredients you have, but not enough of for this many servings (when the units compare).
+  const shortBy = useMemo(() => {
+    const m = new Map<string, { have: number; need: number; unit: PantryItem["unit"]; name: string; foodTypeId: string | null }>();
+    for (const u of analysis.uses) {
+      const ing = recipe.ingredients.find((i) => i.name === u.ingredient);
+      const item = views.find((v) => v.item.id === u.itemId)?.item;
+      if (!ing || !item) continue;
+      const need = convertToItemUnit(scaleIngredient(ing, factor), item, tbspOf(recipe));
+      if (need !== null && need > item.quantity * 1.05) m.set(ing.name, { have: item.quantity, need, unit: item.unit, name: item.name, foodTypeId: item.foodTypeId });
+    }
+    return m;
+  }, [analysis.uses, recipe, views, factor]);
   const usesTbsp = tbspOf(recipe) === 15 && recipe.ingredients.some((i) => i.unit === "tbsp");
 
   function addMissing() {
@@ -139,6 +151,10 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
       const name = getFoodType(m.foodTypeId)?.name ?? capitalise(m.name);
       return { name, foodTypeId: m.foodTypeId ?? null, quantity: s.quantity, unit: s.unit, reason: "recipe" as const, recipeId: recipe.id };
     });
+    // Top-ups: only the extra you need to buy.
+    for (const sh of shortBy.values()) {
+      entries.push({ name: sh.name, foodTypeId: sh.foodTypeId, quantity: Math.round((sh.need - sh.have) * 100) / 100, unit: sh.unit, reason: "recipe" as const, recipeId: recipe.id });
+    }
     addToList(entries);
     toast(`Added ${entries.length} ${entries.length === 1 ? "item" : "items"} to your list`);
   }
@@ -279,7 +295,11 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
                         </p>
                       )}
                     </div>
-                    {use ? (
+                    {use && shortBy.has(ing.name) ? (
+                      <span className="shrink-0 rounded-full bg-soon-soft px-2 py-0.5 text-right text-xs font-semibold text-ink">
+                        Have {formatAmount(shortBy.get(ing.name)!.have, shortBy.get(ing.name)!.unit)}, need {formatAmount(shortBy.get(ing.name)!.need, shortBy.get(ing.name)!.unit)}
+                      </span>
+                    ) : use ? (
                       <StatusPill status={use.status}>In larder{use.status !== "fresh" ? ` · ${STATUS_META[use.status].label.toLowerCase()}` : ""}</StatusPill>
                     ) : missing ? (
                       <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-semibold text-ink-2">Missing</span>
@@ -291,9 +311,14 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
               })}
             </ul>
           </Card>
-          {analysis.missing.length > 0 ? (
+          {analysis.missing.length + shortBy.size > 0 ? (
             <Button variant="secondary" block className="mt-3" onClick={addMissing}>
-              <ShoppingBasket size={18} aria-hidden /> Add {analysis.missing.length} missing to list
+              <ShoppingBasket size={18} aria-hidden />{" "}
+              {analysis.missing.length > 0 && shortBy.size > 0
+                ? `Add ${analysis.missing.length} missing and ${shortBy.size} top-up${shortBy.size === 1 ? "" : "s"} to list`
+                : analysis.missing.length > 0
+                  ? `Add ${analysis.missing.length} missing to list`
+                  : `Add ${shortBy.size} top-up${shortBy.size === 1 ? "" : "s"} to list`}
             </Button>
           ) : (
             <p className="mt-3 text-sm text-ink-2">You have everything you need.</p>
