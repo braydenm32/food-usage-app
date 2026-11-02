@@ -4,7 +4,7 @@ import Link from "next/link";
 import { TimerRunner } from "@/components/recipes/timer-runner";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { BookOpen, CalendarDays, ChartColumn, Home, Plus, ShoppingBasket, Warehouse, Settings, WifiOff } from "lucide-react";
+import { BookOpen, CalendarDays, ChefHat, Home, Plus, ShoppingBasket, Warehouse, Settings, WifiOff } from "lucide-react";
 import { Suspense, useSyncExternalStore, type ReactNode } from "react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -20,10 +20,13 @@ const TABS = [
   { href: "/list", label: "List", Icon: ShoppingBasket },
 ] as const;
 
-/** Extra desktop rail links: Plan (when the planner is on) and Insights, above Settings. */
+/**
+ * Extra desktop rail links. Plan shows when the planner is on (the default). "Your kitchen" is
+ * Insights and Nutrition; it stays active on both. On mobile Plan lives inside Recipes.
+ */
 const RAIL_EXTRAS = [
-  { href: "/plan", label: "Plan", Icon: CalendarDays, planner: true },
-  { href: "/insights", label: "Insights", Icon: ChartColumn, planner: false },
+  { href: "/plan", label: "Plan", Icon: CalendarDays, planner: true, also: [] as string[] },
+  { href: "/insights", label: "Your kitchen", Icon: ChefHat, planner: false, also: ["/nutrition"] },
 ] as const;
 
 function isActive(pathname: string, href: string) {
@@ -34,15 +37,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Navigation reads the pathname, so it sits in its own Suspense boundaries and the page can prerender.
   return (
     <div className="lg:flex lg:min-h-dvh">
-      <Suspense fallback={null}>
+      <Suspense fallback={<DesktopNavView pathname="" hidden={false} listCount={0} planner />}>
         <DesktopNav />
       </Suspense>
-      <main className="pb-tabbar mx-auto w-full max-w-3xl lg:px-10 lg:has-[[data-wide]]:max-w-6xl">{children}</main>
+      {/* One shared column: every page has the same left edge and right-aligned header actions. */}
+      <main className="pb-tabbar page-container min-w-0 lg:px-10">{children}</main>
       <OfflinePill />
       <Suspense fallback={null}>
         <TimerRunner />
       </Suspense>
-      <Suspense fallback={null}>
+      <Suspense fallback={<MobileNavView pathname="" hidden={false} listCount={0} />}>
         <MobileNav />
       </Suspense>
     </div>
@@ -64,7 +68,21 @@ function useNavState() {
 }
 
 function DesktopNav() {
-  const { pathname, hidden, listCount, planner } = useNavState();
+  const state = useNavState();
+  return <DesktopNavView {...state} />;
+}
+
+function DesktopNavView({
+  pathname,
+  hidden,
+  listCount,
+  planner,
+}: {
+  pathname: string;
+  hidden: boolean;
+  listCount: number;
+  planner: boolean;
+}) {
   if (hidden) return null;
   const railLink = (active: boolean) =>
     clsx(
@@ -93,8 +111,8 @@ function DesktopNav() {
           })}
         </ul>
         <ul className="mt-6 flex flex-col gap-1 border-t border-line pt-6">
-          {RAIL_EXTRAS.filter((x) => !x.planner || planner).map(({ href, label, Icon }) => {
-            const active = isActive(pathname, href);
+          {RAIL_EXTRAS.filter((x) => !x.planner || planner).map(({ href, label, Icon, also }) => {
+            const active = isActive(pathname, href) || also.some((h) => isActive(pathname, h));
             return (
               <li key={href}>
                 <Link href={href} aria-current={active ? "page" : undefined} className={railLink(active)}>
@@ -123,11 +141,15 @@ function DesktopNav() {
 
 function MobileNav() {
   const { pathname, hidden, listCount } = useNavState();
+  return <MobileNavView pathname={pathname} hidden={hidden} listCount={listCount} />;
+}
+
+function MobileNavView({ pathname, hidden, listCount }: { pathname: string; hidden: boolean; listCount: number }) {
   if (hidden) return null;
   return (
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_20px_-12px_rgb(0_0_0/0.25)] lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 tabbar-surface border-t border-line bg-surface/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden"
       >
         <ul className="mx-auto flex max-w-lg items-stretch justify-around px-2">
           {TABS.map(({ href, label, Icon, ...rest }) => {

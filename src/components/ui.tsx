@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import Link from "next/link";
-import { X, Minus, Plus, Settings as SettingsIcon } from "lucide-react";
+import { X, Minus, Plus, Settings as SettingsIcon, type LucideIcon } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -25,7 +25,7 @@ const buttonBase =
 // Disabled buttons stay solid and legible rather than washed out.
 const buttonVariants: Record<ButtonVariant, string> = {
   primary: "bg-primary text-primary-ink hover:brightness-110 active:brightness-95 disabled:bg-surface-2 disabled:text-ink-3",
-  secondary: "bg-surface text-ink border border-line hover:bg-surface-2 disabled:text-ink-3",
+  secondary: "bg-surface text-ink border border-control-line hover:bg-surface-2 disabled:text-ink-3",
   ghost: "text-ink-2 hover:bg-surface-2 hover:text-ink disabled:text-ink-3",
   danger: "bg-spoiled text-on-status hover:brightness-110 disabled:bg-surface-2 disabled:text-ink-3",
 };
@@ -87,25 +87,44 @@ export function IconButton({
 /* ---------- Page header ---------- */
 
 /**
+ * Shared page column: every screen sits in the same max-w-[1080px] container with one left edge.
+ * AppShell already wraps `main` in `.page-container`; PageHeader aligns its actions to its right edge.
+ *
  * Page title row. `showSettings` adds a gear link to /settings after `actions`; it is hidden
- * at lg, where the side rail already links to Settings.
+ * at lg, where the side rail already links to Settings. Use it on the Today header only.
+ * `display` gives a magazine-style larger Young Serif title with an optional `deck` line.
  */
 export function PageHeader({
   title,
   subtitle,
+  deck,
   actions,
   showSettings,
+  display,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
+  /** Short standfirst under a `display` title. */
+  deck?: ReactNode;
   actions?: ReactNode;
   showSettings?: boolean;
+  display?: boolean;
 }) {
+  const sub = deck ?? subtitle;
   return (
     <header className="flex items-end justify-between gap-4 px-5 pb-4 pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-0 lg:pt-10">
       <div className="min-w-0">
-        <h1 className="font-display text-[2rem] leading-tight text-ink lg:text-[2.5rem]">{title}</h1>
-        {subtitle && <p className="mt-1 text-[15px] text-ink-2">{subtitle}</p>}
+        <h1
+          className={clsx(
+            "font-display leading-tight text-ink",
+            display ? "text-[2.25rem] leading-[1.05] lg:text-[2.75rem]" : "text-[2rem] lg:text-[2.5rem]",
+          )}
+        >
+          {title}
+        </h1>
+        {sub && (
+          <p className={clsx("mt-1 text-ink-2", display ? "mt-2 max-w-xl text-[17px] leading-snug" : "text-[15px]")}>{sub}</p>
+        )}
       </div>
       {(actions || showSettings) && (
         <div className="flex shrink-0 items-center gap-1">
@@ -137,30 +156,64 @@ export function SectionTitle({ children, action }: { children: ReactNode; action
 
 /* ---------- Surfaces ---------- */
 
-export function Card({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+type CardVariant = "default" | "plain" | "inset";
+
+/**
+ * default: bordered surface card.
+ * plain: open rows on the paper, separated by hairlines (put `divide-y divide-line` rows inside).
+ * inset: a grouped list on a recessed surface-2 tray, no border.
+ */
+export function Card({
+  className,
+  children,
+  variant = "default",
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { variant?: CardVariant }) {
   return (
-    <div className={clsx("rounded-[var(--radius-card)] border border-line bg-surface", className)} {...props}>
+    <div
+      className={clsx(
+        variant === "default" && "rounded-[var(--radius-card)] border border-line bg-surface",
+        variant === "plain" && "divide-y divide-line border-y border-line",
+        variant === "inset" && "overflow-hidden rounded-[var(--radius-card)] bg-surface-2",
+        className,
+      )}
+      {...props}
+    >
       {children}
     </div>
   );
 }
 
+/** A figure in Figtree semibold with tabular numerals. Use for counts and quantities in stat tiles. */
+export function StatNumber({ className, children }: { className?: string; children: ReactNode }) {
+  return <span className={clsx("stat-num", className)}>{children}</span>;
+}
+
 export function EmptyState({
   emoji,
+  icon: Icon,
   title,
   body,
   action,
 }: {
-  emoji: string;
+  /** Back-compat. Prefer `icon`. */
+  emoji?: string;
+  icon?: LucideIcon;
   title: string;
   body?: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <div className="flex flex-col items-center px-6 py-12 text-center">
-      <div aria-hidden className="mb-4 text-5xl">
-        {emoji}
-      </div>
+      {Icon ? (
+        <div aria-hidden className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-soft text-primary">
+          <Icon size={28} />
+        </div>
+      ) : (
+        <div aria-hidden className="mb-4 text-5xl">
+          {emoji}
+        </div>
+      )}
       <p className="font-display text-xl text-ink">{title}</p>
       {body && <p className="mt-2 max-w-xs text-[15px] text-ink-2">{body}</p>}
       {action && <div className="mt-6">{action}</div>}
@@ -172,10 +225,11 @@ export function EmptyState({
 
 export function Chip({
   selected,
+  count,
   className,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { selected?: boolean }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { selected?: boolean; count?: ReactNode }) {
   return (
     <button
       type="button"
@@ -183,12 +237,22 @@ export function Chip({
       className={clsx(
         "relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
         HIT_44,
-        selected ? "border-primary bg-primary text-primary-ink" : "border-line bg-surface text-ink-2 hover:text-ink",
+        selected ? "border-primary bg-primary text-primary-ink" : "border-control-line bg-surface text-ink-2 hover:text-ink",
         className,
       )}
       {...props}
     >
       {children}
+      {count !== undefined && (
+        <span
+          className={clsx(
+            "rounded-full px-1.5 text-xs font-semibold tabular-nums",
+            selected ? "bg-primary-ink/20 text-primary-ink" : "bg-surface-2 text-ink",
+          )}
+        >
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -207,7 +271,7 @@ export function Segmented<T extends string>({
   className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className={clsx("flex rounded-full bg-surface-2 p-1", className)}>
+    <div role="radiogroup" aria-label={label} className={clsx("flex rounded-full border border-control-line bg-surface-2 p-1", className)}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -218,7 +282,7 @@ export function Segmented<T extends string>({
           className={clsx(
             "relative flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full px-3 text-sm font-medium transition-colors",
             HIT_44,
-            value === o.value ? "bg-surface text-ink shadow-card" : "text-ink-2 hover:text-ink",
+            value === o.value ? "bg-surface text-ink shadow-card ring-1 ring-control-line" : "text-ink-2 hover:text-ink",
           )}
         >
           {o.label}
@@ -238,7 +302,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
     <input
       ref={ref}
       className={clsx(
-        "h-12 w-full rounded-2xl border border-line bg-surface px-4 text-base text-ink placeholder:text-ink-3 focus:border-primary focus:outline-none",
+        "h-12 w-full rounded-2xl border border-control-line bg-surface px-4 text-base text-ink placeholder:text-ink-3 focus:border-primary focus:outline-none",
         className,
       )}
       {...props}
@@ -276,7 +340,7 @@ export function Stepper({
 }) {
   const round = (v: number) => Math.round(v * 100) / 100;
   return (
-    <div className="inline-flex items-center rounded-full border border-line bg-surface" role="group" aria-label={label}>
+    <div className="inline-flex items-center rounded-full border border-control-line bg-surface" role="group" aria-label={label}>
       <button
         type="button"
         aria-label={`Decrease ${label}`}
@@ -357,6 +421,12 @@ export function Switch({
 
 /* ---------- Sheet (bottom sheet on mobile, centred dialog on desktop) ---------- */
 
+/**
+ * Bottom sheet on mobile, centred dialog on desktop.
+ * - Height follows the visual viewport, so the iOS keyboard doesn't push the footer off-screen.
+ * - In landscape (short) viewports the whole sheet scrolls and the footer is compact, not sticky.
+ * - Pass `dirty` to ask "Discard your changes?" before Esc, backdrop or the close button dismisses it.
+ */
 export function Sheet({
   open,
   onClose,
@@ -364,6 +434,7 @@ export function Sheet({
   children,
   footer,
   wide,
+  dirty,
 }: {
   open: boolean;
   onClose: () => void;
@@ -371,6 +442,7 @@ export function Sheet({
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  dirty?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -382,6 +454,27 @@ export function Sheet({
     if (!open && d.open) d.close();
   }, [open]);
 
+  // Track the visual viewport height (it shrinks when the on-screen keyboard opens).
+  useEffect(() => {
+    const d = ref.current;
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!open || !d || !vv) return;
+    const sync = () => d.style.setProperty("--vvh", `${vv.height}px`);
+    sync();
+    vv.addEventListener("resize", sync);
+    vv.addEventListener("scroll", sync);
+    return () => {
+      vv.removeEventListener("resize", sync);
+      vv.removeEventListener("scroll", sync);
+      d.style.removeProperty("--vvh");
+    };
+  }, [open]);
+
+  const requestClose = () => {
+    if (dirty && !window.confirm("Discard your changes?")) return;
+    onClose();
+  };
+
   return (
     <dialog
       ref={ref}
@@ -389,14 +482,15 @@ export function Sheet({
       onClose={onClose}
       onCancel={(e) => {
         e.preventDefault();
-        onClose();
+        requestClose();
       }}
       onClick={(e) => {
-        if (e.target === ref.current) onClose();
+        if (e.target === ref.current) requestClose();
       }}
       className={clsx(
-        "m-0 mt-auto max-h-[92dvh] w-full max-w-none overflow-hidden rounded-t-[1.75rem] bg-surface p-0 text-ink backdrop:bg-black/40 backdrop:animate-fade-in",
+        "m-0 mt-auto max-h-[calc(var(--vvh,100dvh)*0.92)] w-full max-w-none overflow-hidden rounded-t-[1.75rem] bg-surface p-0 text-ink backdrop:bg-black/40 backdrop:animate-fade-in",
         "open:flex open:flex-col open:animate-sheet-up",
+        "short:max-h-[calc(var(--vvh,100dvh)*0.98)] short:overflow-y-auto",
         "lg:m-auto lg:max-h-[85vh] lg:rounded-[1.75rem]",
         wide ? "lg:max-w-2xl" : "lg:max-w-lg",
       )}
@@ -407,13 +501,22 @@ export function Sheet({
             <h2 id={titleId} className="font-display text-2xl leading-tight">
               {title}
             </h2>
-            <IconButton label="Close" onClick={onClose} className="-mr-2">
+            <IconButton label="Close" onClick={requestClose} className="-mr-2">
               <X size={20} />
             </IconButton>
           </div>
-          <div className="flex-1 overflow-y-auto px-5 pb-5">{children}</div>
+          <div className={clsx("flex-1 overflow-y-auto px-5 pb-5", "short:flex-none short:overflow-visible")}>
+            {children}
+          </div>
           {footer && (
-            <div className="border-t border-line px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">{footer}</div>
+            <div
+              className={clsx(
+                "border-t border-line px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3",
+                "short:pb-2 short:pt-2",
+              )}
+            >
+              {footer}
+            </div>
           )}
         </>
       )}
