@@ -72,17 +72,48 @@ export interface FoodMatch {
   confidence: "high" | "medium" | "low";
 }
 
+/** Cooked food and leftovers: what "cooked …", "leftover …" and "homemade …" lines can match. */
+const COOKED_ID = /^(?:cooked-|leftovers-)|-cooked(?:-|$)|^eggs-boiled$|^ready-mash$|^slow-cooked-meat$/;
+const COOKED_INDEX = INDEX.filter((x) => COOKED_ID.test(x.food.id));
+const LEFTOVERS_ID = "leftovers-meal";
+const COOKED_PREFIX = /^\s*(?:cooked|left ?overs?|last night'?s)\b/i;
+const HOMEMADE_PREFIX = /^\s*(?:home ?made|home ?cooked)\b/i;
+
 /**
  * Best-effort match from free text ("WW BABY SPINACH 120G", "milk", "2x tins tomatoes")
  * to a food type. Returns undefined when nothing plausible matches.
+ *
+ * Lines that start "cooked", "leftover" or "homemade" are cooked food: they only match the cooked
+ * and leftover types (cooked lentils are not two-year dried lentils), falling back to leftovers.
  */
 export function matchFoodType(text: string): FoodMatch | undefined {
-  const words = termWords(text);
+  const best = bestMatch(termWords(text), INDEX);
+  if (COOKED_PREFIX.test(text)) {
+    // An exact name ("cooked mussels pack") still wins; otherwise only cooked types.
+    if (best && best.score >= 100) return best;
+    return bestMatch(termWords(text), COOKED_INDEX) ?? leftovers();
+  }
+  if (HOMEMADE_PREFIX.test(text)) {
+    // Homemade bread is still bread; homemade soup or pesto keeps like leftovers, not like a tin or jar.
+    const f = best?.food;
+    if (!f || (f.pantryDays ?? 0) >= 60 || f.category === "meat" || f.category === "seafood") {
+      return bestMatch(termWords(text), COOKED_INDEX) ?? leftovers();
+    }
+  }
+  return best;
+}
+
+function leftovers(): FoodMatch | undefined {
+  const food = BY_ID.get(LEFTOVERS_ID);
+  return food ? { food, score: 60, confidence: "medium" } : undefined;
+}
+
+function bestMatch(words: string[], index: Indexed[]): FoodMatch | undefined {
   if (words.length === 0) return undefined;
   const joined = words.join(" ");
   let best: FoodMatch | undefined;
 
-  for (const { food, terms } of INDEX) {
+  for (const { food, terms } of index) {
     for (const term of terms) {
       if (term.length === 0) continue;
       const t = term.join(" ");
@@ -90,8 +121,9 @@ export function matchFoodType(text: string): FoodMatch | undefined {
       if (t === joined) score = 100;
       else if (` ${joined} `.includes(` ${t} `)) score = 70 + term.length * 5; // whole alias inside text
       else {
-        // Partial: share of alias words found, with prefix matching for receipt abbreviations.
-        const hits = term.filter((tw) => words.some((w) => w === tw || (w.length >= 3 && tw.startsWith(w)))).length;
+        // Partial: share of alias words found, with prefix matching for receipt abbreviations
+        // ("SPIN" for spinach). Three letters is too loose: "LOL" would read as lollies.
+        const hits = term.filter((tw) => words.some((w) => w === tw || (w.length >= 4 && tw.startsWith(w)))).length;
         if (hits === 0) continue;
         score = (hits / term.length) * 50 + hits * 4 - Math.max(0, words.length - hits) * 2;
       }

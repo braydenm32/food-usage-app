@@ -6,6 +6,9 @@ import { Button } from "@/components/ui";
 import { lineToDraft, parseLocalList, type ApiError, type ParseResponse } from "@/lib/drafts";
 import { ErrorNotice } from "./notices";
 
+/** Same limit as the server: past this it's almost certainly the whole email, not the items part. */
+export const MAX_PASTE_CHARS = 30_000;
+
 const PLACEHOLDER = `milk 2L
 2x tins tomatoes
 500g beef mince
@@ -22,6 +25,10 @@ export function PasteInput({ onResult }: { onResult: (r: ParseResponse) => void 
   async function submit() {
     if (!text.trim()) {
       setError("Paste or type at least one item.");
+      return;
+    }
+    if (text.length > MAX_PASTE_CHARS) {
+      setError("That’s a lot of text. Paste just the items part of the email.");
       return;
     }
     setBusy(true);
@@ -72,6 +79,8 @@ export function PasteInput({ onResult }: { onResult: (r: ParseResponse) => void 
           }}
           placeholder={PLACEHOLDER}
           aria-describedby={hintId}
+          autoFocus
+          enterKeyHint="enter"
           rows={10}
           className="min-h-56 w-full resize-y rounded-2xl border border-line bg-surface px-4 py-3 text-base leading-relaxed text-ink placeholder:text-ink-3 focus:border-primary focus:outline-none"
         />

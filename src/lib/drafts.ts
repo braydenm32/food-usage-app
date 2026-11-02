@@ -2,9 +2,9 @@
 // Shared by the client (add flow) and the server (API routes), so no React or store imports here.
 // Relative imports keep this file loadable by vitest without path-alias config.
 
-import { defaultsForUnknown } from "./shelf-life/engine";
+import { computeExpiry, daysBetween, defaultsForUnknown, parseLocalDate, storageDays } from "./shelf-life/engine";
 import { getFoodType, matchFoodType } from "./shelf-life/foods";
-import type { DraftItem, FoodType, ItemEvent, LocationId, PantryItem, Unit } from "./types";
+import type { DraftItem, FoodType, ItemEvent, LocationId, PantryItem, ShelfLifeOverride, StorageLocation, Unit } from "./types";
 
 /** One line read from a receipt, list, order email or barcode lookup, before matching. */
 export interface ParsedLine {
@@ -16,6 +16,8 @@ export interface ParsedLine {
   count?: number;
   /** Pack size or loose amount (the "2L" in "2 x milk 2L"). */
   size?: { quantity: number; unit: Unit };
+  /** How it was sold when the line said so ("bag", "punnet", "tub"), without a size. */
+  pack?: Unit;
   /** AUD for the whole line. */
   price?: number;
   /** Printed use-by / best-before as ISO date, if read. */
@@ -34,6 +36,8 @@ export interface ReviewDraft extends DraftItem {
   suggestion?: { foodTypeId: string; name: string; emoji: string };
   /** When set, this line tops up that existing larder item instead of adding a new one. */
   mergeIntoId?: string;
+  /** The shopper said a printed date that looked far off is right (see checkPrintedDate). */
+  dateConfirmed?: boolean;
 }
 
 /* ---------- Units ---------- */
@@ -81,6 +85,21 @@ const UNIT_ALIASES: Record<string, Unit> = {
   btl: "bottle",
   ea: "item",
   each: "item",
+  bag: "bag",
+  bags: "bag",
+  net: "bag",
+  nets: "bag",
+  punnet: "punnet",
+  punnets: "punnet",
+  pnt: "punnet",
+  tub: "tub",
+  tubs: "tub",
+  tray: "tray",
+  trays: "tray",
+  box: "pack",
+  boxes: "pack",
+  carton: "pack",
+  cartons: "pack",
 };
 
 export function normaliseUnit(u: string | undefined | null): Unit | undefined {
@@ -210,16 +229,24 @@ function unknownDefaults(name: string): Pick<DraftItem, "emoji" | "locationId" |
 
 /** Work out the quantity + unit to track, given what was read and what the food usually comes in. */
 export function resolveQuantity(
-  line: Pick<ParsedLine, "count" | "size">,
+  line: Pick<ParsedLine, "count" | "size" | "pack">,
   food?: Pick<FoodType, "defaultUnit" | "defaultQuantity">,
 ): { quantity: number; unit: Unit } {
   const count = line.count && line.count > 0 ? line.count : undefined;
   const size = line.size && line.size.quantity > 0 ? line.size : undefined;
 
+  const pack = line.pack;
+
   if (food) {
     const fu = food.defaultUnit;
     if (isCountUnit(fu)) {
       const packs = count ?? 1;
+      // "12 eggs" is twelve eggs, not twelve dozen.
+      if (fu === "dozen" && count && count >= 4 && !size) {
+        return count % 6 === 0 ? { quantity: count / 12, unit: "dozen" } : { quantity: count, unit: "item" };
+      }
+      // "bag of apples", "2 punnets strawberries": keep how it was sold rather than guessing a count.
+      if (pack && !size && (fu === "item" || fu === "pack")) return { quantity: packs, unit: pack };
       // "12pk" / "6 pack" arrive as a size in items: how many are inside one pack.
       if (size && size.unit === "item") {
         if (fu === "dozen") return { quantity: round((size.quantity * packs) / 12), unit: "dozen" };
@@ -240,6 +267,7 @@ export function resolveQuantity(
       return { quantity: round(convert(size.quantity, size.unit, fu) * (count ?? 1)), unit: fu };
     }
     if (size && isCountUnit(size.unit)) return { quantity: size.quantity * (count ?? 1), unit: size.unit };
+    if (pack) return { quantity: count ?? 1, unit: pack };
     if (count) return { quantity: count, unit: "item" };
     return { quantity: food.defaultQuantity, unit: fu };
   }
@@ -250,8 +278,24 @@ export function resolveQuantity(
       : { quantity: round(size.quantity * count), unit: size.unit };
   }
   if (size) return size;
+  if (pack) return { quantity: count ?? 1, unit: pack };
   if (count) return { quantity: count, unit: "item" };
   return { quantity: 1, unit: "item" };
+}
+
+/** At most this many separate packs from one line; beyond it, it's one stock. */
+const MAX_SPLIT_PACKS = 12;
+
+/**
+ * "2x milk 2L" is two bottles you open one at a time, so it becomes 2 packs of 2 L (separate larder
+ * items) rather than one 4 L stock. Only weighed or measured packs split; "6 tins" stays one line.
+ */
+function splitPacks(line: Pick<ParsedLine, "count" | "size">, food?: Pick<FoodType, "defaultUnit">): number | undefined {
+  const count = line.count;
+  if (!count || !Number.isInteger(count) || count < 2 || count > MAX_SPLIT_PACKS) return undefined;
+  if (!line.size || line.size.quantity <= 0 || isCountUnit(line.size.unit)) return undefined;
+  if (food && isCountUnit(food.defaultUnit)) return undefined;
+  return count;
 }
 
 /** Sentence-case a product name for display: "FULL CREAM MILK" → "Full cream milk". */
@@ -264,11 +308,21 @@ export function tidyName(name: string): string {
 }
 
 export function lineToDraft(line: ParsedLine): ReviewDraft {
-  const isFood = line.isFood ?? !isLikelyNonFood(`${line.name} ${line.rawText ?? ""}`);
+  const draft = lineToDraftUnchecked(line);
+  // A printed date that looks far off (often a misread) waits for the shopper to confirm it.
+  if (draft.include && checkPrintedDate(draft.printedDate) !== "ok") draft.include = false;
+  return draft;
+}
+
+function lineToDraftUnchecked(line: ParsedLine): ReviewDraft {
+  // "carrots 1kg bag": the bag is packaging, not a carry bag.
+  const raw = line.rawText ? (stripPackaging(line.rawText)?.text ?? line.rawText) : "";
+  const isFood = line.isFood ?? !isLikelyNonFood(`${line.name} ${raw}`);
   const match = isFood ? bestMatch(line.name, line.rawText) : undefined;
   // A low-confidence match is a guess: keep the shopper's own name and only suggest the food.
   const food = match && match.confidence !== "low" ? match.food : undefined;
-  const { quantity, unit } = resolveQuantity(line, food);
+  const packs = splitPacks(line, food);
+  const { quantity, unit } = resolveQuantity(packs ? { size: line.size } : line, food);
 
   if (!food) {
     const guess = match?.food;
@@ -285,6 +339,7 @@ export function lineToDraft(line: ParsedLine): ReviewDraft {
       include: isFood,
       confidence: "low",
       isFood,
+      ...(packs ? { packs } : {}),
       ...(guess && looksLike(line.name, guess) ? { suggestion: { foodTypeId: guess.id, name: guess.name, emoji: guess.emoji } } : {}),
     };
   }
@@ -301,11 +356,16 @@ export function lineToDraft(line: ParsedLine): ReviewDraft {
     price: line.price,
     printedDate: line.printedDate,
     dateKind: food.dateKind,
-    include: true,
+    // A partial match ("Best guess") is left unticked until the shopper says it's right.
+    include: !match || match.confidence === "high" || match.score >= TRUSTED_SCORE,
     confidence: match?.confidence ?? "high",
     isFood: true,
+    ...(packs ? { packs } : {}),
   };
 }
+
+/** Partial matches below this score (one loose word, or a few words of a longer name) are only a guess. */
+const TRUSTED_SCORE = 55;
 
 /** Words that say nothing about which food it is, so they can't carry a "Did you mean" on their own. */
 const GENERIC_WORDS = new Set(["fresh", "frozen", "piece", "pieces", "root", "whole", "sliced", "diced", "loose", "large", "small", "bag", "pack", "organic", "free", "range", "baby", "mini", "red", "green", "white", "brown"]);
@@ -332,7 +392,7 @@ function looksLike(text: string, food: FoodType): boolean {
   const words = (s: string) => s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
   const theirs = words(text);
   const ours = [food.name, ...food.aliases].flatMap(words);
-  return theirs.some((w) => ours.some((o) => o === w || o.startsWith(w) || editDistance(w, o) <= (o.length >= 6 ? 2 : 1)));
+  return theirs.some((w) => ours.some((o) => o === w || (w.length >= 4 && o.startsWith(w)) || editDistance(w, o) <= (o.length >= 6 ? 2 : 1)));
 }
 
 /** Match on the cleaned name, falling back to the raw line when the name matches nothing or only weakly. */
@@ -385,7 +445,7 @@ export function applyFoodType(draft: ReviewDraft, foodTypeId: string): ReviewDra
     unit: keepAmount ? draft.unit : food.defaultUnit,
     confidence: "high",
     isFood: true,
-    include: true,
+    include: !!draft.dateConfirmed || checkPrintedDate(draft.printedDate) === "ok",
     suggestion: undefined,
     mergeIntoId: undefined,
   };
@@ -414,13 +474,27 @@ export function withLastAdded(draft: ReviewDraft, events: ItemEvent[], locationI
   return draft;
 }
 
+/** What findMergeTarget needs to tell a fresh item from one that's close to its date. */
+export interface MergeContext {
+  locations: StorageLocation[];
+  overrides?: Record<string, ShelfLifeOverride>;
+  useSoonDays?: number;
+  now?: Date;
+}
+
 /**
  * An unopened larder item this draft could top up: same food, same spot, same printed date,
  * never opened or thawed, and an amount we can add to.
+ *
+ * With `ctx`, the item must also still be fresh, and (when its date is an estimate) bought
+ * recently enough that the new food sharing its clock isn't made to look older: within a tenth
+ * of its shelf life, at least a day. So new milk never tops up last week's, and nothing tops up
+ * an item that's due soon or past its date.
  */
 export function findMergeTarget(
   draft: Pick<ReviewDraft, "foodTypeId" | "locationId" | "printedDate" | "unit">,
   items: PantryItem[],
+  ctx?: MergeContext,
 ): PantryItem | undefined {
   if (!draft.foodTypeId) return undefined;
   return items.find(
@@ -431,8 +505,38 @@ export function findMergeTarget(
       !i.thawedAt &&
       !i.expiredWhenFrozen &&
       (i.printedDate ?? "") === (draft.printedDate ?? "") &&
-      compatibleUnits(draft.unit, i.unit),
+      compatibleUnits(draft.unit, i.unit) &&
+      (!ctx || freshEnoughToTopUp(i, ctx)),
   );
+}
+
+function freshEnoughToTopUp(item: PantryItem, ctx: MergeContext): boolean {
+  const now = ctx.now ?? new Date();
+  const food = getFoodType(item.foodTypeId);
+  const override = item.foodTypeId ? ctx.overrides?.[item.foodTypeId] : undefined;
+  const location = ctx.locations.find((l) => l.id === item.locationId);
+  const info = computeExpiry(item, { food, override, location, useSoonDays: ctx.useSoonDays, now });
+  if (info.status !== "fresh") return false;
+  if (!info.estimated) return true;
+  const life = storageDays(food, override, location?.kind ?? "fridge", item.name);
+  const since = item.frozenAt && location?.kind === "freezer" ? item.frozenAt : item.addedAt;
+  return daysBetween(new Date(since), now) <= Math.max(1, Math.floor(life / 10));
+}
+
+/* ---------- Printed date sanity ---------- */
+
+/** How a printed date looks: fine, or so far off it's probably a typo or a misread. */
+export type PrintedDateCheck = "ok" | "far-future" | "far-past";
+
+/** More than 2 years ahead or more than 1 year past is worth a second look before adding. */
+export function checkPrintedDate(iso: string | undefined, now: Date = new Date()): PrintedDateCheck {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return "ok";
+  const d = parseLocalDate(iso);
+  if (Number.isNaN(d.getTime())) return "ok";
+  const diff = daysBetween(now, d);
+  if (diff > 730) return "far-future";
+  if (diff < -365) return "far-past";
+  return "ok";
 }
 
 /* ---------- Local text parser ---------- */
@@ -493,6 +597,24 @@ const TRAILING_PRICE_RE = /\s+(\d+\.\d{2})\s*$/;
 const COUNT_PREFIX = /^(\d+(?:\.\d+)?)\s*(?:x|×|\*)\s*(?=\S)/i; // "2x milk", "2 x milk"
 const COUNT_SUFFIX = /\s*(?:x|×|\*)\s*(\d+)\s*$/i; // "milk x2"
 const COUNT_WORD_PREFIX = /^(\d+)\s+(?=[a-z])/i; // "3 apples"
+const COUNT_TRAILING = /^(.*[a-z].*?)\s+(\d{1,2})$/i; // "bananas 6"
+/** A line that is only a weight or volume: "1.2kg" under a product in an order email. */
+const SIZE_ONLY = /^(\d+(?:\.\d+)?)\s*(kg|kgs|g|gm|gms|grams?|ml|mls|l|lt|ltr|litres?|liters?)$/i;
+/** How it was sold: a word to drop from the name ("carrots 1kg bag", "punnet of strawberries"). */
+const PACKAGING_RE = /(^|\s)(bags?|nets?|punnets?|pnt|trays?|tubs?|packs?|packets?|pkts?|boxe?s?|cartons?)(?:\s+of)?(?=\s|$)/i;
+/** Words that make "bag" or "box" the product itself, not its packaging. */
+const PACKAGING_IS_PRODUCT =
+  /\b(carry|shopping|reusable|paper|plastic|green|cooler|freezer|zip ?lock|ziplock|sandwich|bin|garbage|rubbish|kitchen|vacuum|oven|storage|lunch|gift|tote|calico|tea|lolly|lollies|ice|steam|tissues?|toilet)\b/i;
+
+/** Drop one packaging word from a product name, unless the bag or box is what was bought. */
+function stripPackaging(text: string): { text: string; unit?: Unit } | null {
+  const m = text.match(PACKAGING_RE);
+  if (!m || m.index === undefined) return null;
+  const rest = (text.slice(0, m.index) + " " + text.slice(m.index + m[0].length)).replace(/\s{2,}/g, " ").trim();
+  if (!/[a-z]{2,}/i.test(rest) || PACKAGING_IS_PRODUCT.test(text)) return null;
+  const unit = normaliseUnit(m[2]);
+  return { text: rest, unit: unit && unit !== "pack" ? unit : "pack" };
+}
 /** Multi-buy fragment left after the line total: "2 x $13.00", "2 @ $13.00 ea /". */
 const MULTIBUY_RE = /\s*(\d+)\s*(?:x|×|@|for)\s*\$\s?\d+(?:\.\d{1,2})?(?:\s*(?:ea|each))?\s*[/=]?\s*$/i;
 const WORD_NUMBERS: Record<string, number> = {
@@ -605,10 +727,30 @@ export function parseLine(input: string): ParsedLine | null {
 
   // "a dozen eggs" style: dozen as a unit
   text = text.replace(/^(?:of|x)\s+/i, "").replace(/\s*[-–,:]\s*$/, "").replace(/\s{2,}/g, " ").trim();
+  // "Chicken breast fillets per kg": the price basis isn't part of the name.
+  text = text.replace(/\s+per\s+(?:kg|100\s?g|each|ea)\b\.?/i, "").trim();
+
+  // A bare trailing count: "bananas 6", "apples 4" (only when nothing else gave an amount).
+  if (count === undefined && !size) {
+    const tc = text.match(COUNT_TRAILING);
+    if (tc && Number(tc[2]) >= 1) {
+      count = Number(tc[2]);
+      text = tc[1].trim();
+    }
+  }
+
+  let pack: Unit | undefined;
+  const pk = stripPackaging(text);
+  if (pk) {
+    text = pk.text.replace(/^(?:of)\s+/i, "").trim();
+    // A pack word only counts as the unit when no size was given ("carrots 1kg bag" is 1 kg).
+    if (!size) pack = pk.unit;
+  }
+
   if (!text) return null;
   if (!/[a-z]/i.test(text)) return null;
 
-  return { rawText, name: text, count, size, price };
+  return { rawText, name: text, count, size, price, ...(pack ? { pack } : {}) };
 }
 
 function normaliseName(s: string): string {
@@ -706,6 +848,17 @@ export function parseLocalList(text: string): LocalParseResult {
     const q = trimmed.match(QTY_ONLY);
     if (q && last) {
       last.count = Number(q[1]);
+      continue;
+    }
+    // "1.2kg" on its own line: the weight of the product above (Woolworths and Coles weighed items).
+    const so = trimmed.match(SIZE_ONLY);
+    if (so) {
+      const unit = normaliseUnit(so[2]);
+      if (last && unit && (!last.size || last.size.unit === "item")) {
+        last.size = { quantity: Number(so[1]), unit };
+        delete last.pack;
+      }
+      if (!last) skipped++;
       continue;
     }
     if (PRICE_ONLY.test(trimmed)) {

@@ -22,6 +22,10 @@ const PLURAL: Partial<Record<Unit, string>> = {
   jar: "jars",
   bottle: "bottles",
   dozen: "dozen",
+  bag: "bags",
+  punnet: "punnets",
+  tub: "tubs",
+  tray: "trays",
 };
 
 /** Trim to at most 2 decimals without trailing zeros: 1.5 → "1.5", 1.25 → "1.25", 2 → "2". */

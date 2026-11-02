@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeExpiry,
+  dateLabel,
   defaultsForUnknown,
   describeDaysLeft,
   freezerNotRecommended,
@@ -47,30 +48,44 @@ describe("unknown-food fallback", () => {
     expect(expiry(item({ name: "Dragon fruit jam" }), FRIDGE).daysLeft).toBe(5);
   });
 
-  it("treats unknown raw meat and seafood as high risk: fridge, use-by, 3 days", () => {
-    for (const name of ["Kangaroo fillet", "Pork belly", "Fish cakes", "Chicken kiev", "Snags"]) {
-      expect(isHighRisk(name)).toBe(true);
+  it("treats unknown raw meat and seafood as high risk: fridge, use-by, 2 days", () => {
+    for (const name of ["Kangaroo fillet", "Pork belly", "Fish cakes", "Chicken kiev", "Snags", "Barramundi", "Flathead tails", "Rainbow trout", "Whiting", "Bream", "Fresh tuna", "Sardines", "Baby octopus", "Wagyu patties"]) {
+      expect(isHighRisk(name), name).toBe(true);
     }
-    expect(isHighRisk("Mango chutney")).toBe(false);
-    expect(defaultsForUnknown("Beef strips")).toMatchObject({ locationId: "fridge", dateKind: "use-by", days: 3, highRisk: true });
-    expect(expiry(item({ name: "Beef strips" }), FRIDGE).daysLeft).toBe(3);
-    expect(expiry(item({ name: "Beef strips" }), PANTRY).daysLeft).toBe(3);
+    for (const name of ["Mango chutney", "Tuna in springwater", "Tinned sardines", "Beef jerky", "Chicken stock", "Fish sauce"]) {
+      expect(isHighRisk(name), name).toBe(false);
+    }
+    expect(defaultsForUnknown("Beef strips")).toMatchObject({ locationId: "fridge", dateKind: "use-by", days: 2, highRisk: true });
+    expect(expiry(item({ name: "Beef strips" }), FRIDGE).daysLeft).toBe(2);
+    // Raw meat left on the bench: use it today.
+    expect(expiry(item({ name: "Beef strips" }), PANTRY).daysLeft).toBe(0);
   });
 
-  it("keeps 30 days for unknown foods in the pantry and 90 frozen", () => {
-    expect(expiry(item({ name: "Mystery crackers" }), PANTRY).daysLeft).toBe(30);
+  it("keeps a short, cautious 7 days for unknown foods in the pantry and 90 frozen", () => {
+    expect(expiry(item({ name: "Mystery crackers" }), PANTRY).daysLeft).toBe(7);
     expect(expiry(item({ name: "Mystery crackers", frozenAt: daysAgo(0) }), FREEZER).daysLeft).toBe(90);
   });
 });
 
 describe("known food with no days for its spot", () => {
-  it("uses the shortest other life and says where it belongs", () => {
+  it("uses a safe short stand-in and says where it belongs", () => {
     const milk = getFoodType("milk-full-cream");
     expect(storageWarning(milk, "pantry")).toBe("Not suited to the pantry — move it to the fridge");
     expect(storageWarning(milk, "fridge")).toBeUndefined();
     const info = expiry(item({ foodTypeId: "milk-full-cream", dateKind: "use-by" }), PANTRY);
-    expect(info.daysLeft).toBe(milk!.fridgeDays);
+    expect(info.daysLeft).toBe(1);
     expect(info.basis).toMatch(/move it to the fridge/);
+  });
+
+  it("never lends a perishable the other spot's long life", () => {
+    // Potatoes keep 5 weeks in the pantry, not in the fridge.
+    expect(storageDays(getFoodType("potato"), undefined, "fridge")).toBe(3);
+    // A frozen-only food left in the fridge or pantry.
+    expect(storageDays(getFoodType("frozen-chips"), undefined, "fridge")).toBe(3);
+    expect(storageDays(getFoodType("frozen-chips"), undefined, "pantry")).toBe(1);
+    // "Tuna" in the fridge is fresh fish, not the tin it matched.
+    expect(storageDays(getFoodType("tuna-tin"), undefined, "fridge", "Tuna")).toBe(2);
+    expect(storageDays(getFoodType("tuna-tin"), undefined, "fridge", "Tinned tuna")).toBe(1095);
   });
 
   it("gives foods that don't freeze well 30 days and a texture warning", () => {
@@ -116,6 +131,43 @@ describe("expired, then frozen", () => {
   });
 });
 
+describe("opened clock", () => {
+  it("never makes an item fresher by opening it (estimated dates)", () => {
+    // Milk added 8 days ago is past its 7 fridge days; opening it today must not reset it.
+    const milk = item({ foodTypeId: "milk-full-cream", dateKind: "use-by", addedAt: daysAgo(8), openedAt: daysAgo(0) });
+    const info = expiry(milk, FRIDGE);
+    expect(info.status).toBe("expired");
+    expect(info.basis).toMatch(/already close to its date/);
+    // Yoghurt opened on day 12 of 14 gets 2 more days, not 5.
+    const yog = item({ foodTypeId: "yoghurt-natural", dateKind: "use-by", addedAt: daysAgo(12), openedAt: daysAgo(0) });
+    expect(expiry(yog, FRIDGE).daysLeft).toBe(2);
+    // Opened soon after buying: the opened life applies.
+    const fresh = item({ foodTypeId: "yoghurt-natural", dateKind: "use-by", addedAt: daysAgo(1), openedAt: daysAgo(0) });
+    expect(expiry(fresh, FRIDGE).daysLeft).toBe(5);
+  });
+
+  it("caps at a printed best-before date too", () => {
+    const jam = item({ foodTypeId: "yoghurt-natural", dateKind: "best-before", printedDate: "2026-10-30", openedAt: daysAgo(0) });
+    const info = expiry(jam, FRIDGE);
+    expect(info.daysLeft).toBe(1);
+    expect(info.estimated).toBe(false);
+  });
+
+  it("keeps a pantry jar's life when it's opened into the fridge", () => {
+    const sauce = item({ foodTypeId: "tomato-sauce", addedAt: daysAgo(40), openedAt: daysAgo(0) });
+    expect(expiry(sauce, FRIDGE).daysLeft).toBe(getFoodType("tomato-sauce")!.openedDays);
+  });
+});
+
+describe("dateLabel", () => {
+  it("says best quality by in the freezer", () => {
+    expect(dateLabel("use-by", "freezer")).toBe("Best quality by");
+    expect(dateLabel("use-by", "fridge")).toBe("Use by");
+    expect(dateLabel("best-before", "pantry")).toBe("Best before");
+    expect(dateLabel("use-by", "freezer", { thawed: true })).toBe("Use by");
+  });
+});
+
 describe("describeDaysLeft", () => {
   const info = (daysLeft: number, estimated: boolean): ExpiryInfo => ({
     daysLeft,
@@ -138,6 +190,14 @@ describe("describeDaysLeft", () => {
   it("is honest about estimates", () => {
     expect(describeDaysLeft(info(5, true), "use-by")).toBe("about 5 days left");
     expect(describeDaysLeft(info(5, false), "use-by")).toBe("5 days left");
+  });
+
+  it("rounds long spans in plain words", () => {
+    expect(describeDaysLeft(info(364, false), "best-before")).toBe("about a year left");
+    expect(describeDaysLeft(info(200, true), "best-before")).toBe("about 7 months left");
+    expect(describeDaysLeft(info(12775, false), "best-before")).toBe("about 35 years left");
+    expect(describeDaysLeft(info(-2862, false), "best-before")).toBe("Past best before (about 8 years ago)");
+    expect(describeDaysLeft(info(-30, false), "use-by")).toBe("Likely spoiled (about 4 weeks ago)");
   });
 });
 
