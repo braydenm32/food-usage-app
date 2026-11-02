@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ItemStatus, PantryItem, Recipe } from "@/lib/types";
 import { analyseRecipe, exclusionReason, isStaple, labelChecks, matchIngredient, rankRecipes, spillCandidates, type RankableItem } from "./suggest";
 import { BUILTIN_RECIPES } from "./builtin";
+import { visibleTags } from "./display";
 
 function view(name: string, status: ItemStatus, daysLeft = 1, id = `id-${name}`, extra: Partial<PantryItem> = {}): RankableItem {
   const item: PantryItem = {
@@ -204,6 +205,19 @@ describe("check the label", () => {
     const vegan = { ...noProfile, diets: ["vegan" as const] };
     expect(labelChecks(curry, vegan).map((c) => c.ingredient)).toContain("curry paste");
     expect(exclusionReason(curry, vegan)).toBeNull();
+  });
+  it("doesn't ask vegetarians to check vegetable stock", () => {
+    const minestrone = BUILTIN_RECIPES.find((x) => x.title === "Minestrone")!;
+    expect(labelChecks(minestrone, { ...noProfile, diets: ["vegetarian"] })).toEqual([]);
+    const soup = r("s", "Soup", ["chicken stock", "carrot"]);
+    expect(labelChecks(soup, { ...noProfile, diets: ["vegetarian"] }).map((c) => c.ingredient)).toEqual(["chicken stock"]);
+  });
+  it("doesn't show a diet tag the label check would question", () => {
+    // Taco seasoning may contain gluten: no "Gluten free" tag, even when the recipe is tagged so.
+    expect(visibleTags({ ...tacos, tags: [...tacos.tags, "gluten-free"] })).not.toContain("Gluten free");
+    expect(visibleTags({ ...curry, tags: ["vegan", "vegetarian"] })).not.toContain("Vegan");
+    const salad = r("g", "Salad", ["tomato", "cucumber"], ["gluten-free"]);
+    expect(visibleTags(salad)).toContain("Gluten free");
   });
   it("treats flour, sugar, banana and corn chips as carbs", () => {
     const lowCarb = { ...noProfile, diets: ["low-carb" as const] };

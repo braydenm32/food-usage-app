@@ -35,9 +35,11 @@ function trimDecimals(q: number): string {
 
 /**
  * "×2", "500 g", "1.2 kg", "1 L", "2 tins", "½ loaf".
- * Folds large metric amounts: 1000 g or more shows as kg, 1000 ml or more as L.
+ * Folds large metric amounts: 1000 g or more shows as kg, 1000 ml or more as L; and less than
+ * a kilo or litre the other way (0.06 kg shows as 60 g, 0.25 L as 250 ml).
  */
 export function formatQuantity(q: number, unit: Unit): string {
+  if ((unit === "kg" || unit === "L") && q > 0 && q < 1) return `${Math.round(q * 1000)} ${unit === "kg" ? "g" : "ml"}`;
   if (unit === "g" && q >= 1000) return `${trimDecimals(q / 1000)} kg`;
   if (unit === "ml" && q >= 1000) return `${trimDecimals(q / 1000)} L`;
   if (unit === "g" || unit === "ml") return `${trimDecimals(q)} ${unit}`;

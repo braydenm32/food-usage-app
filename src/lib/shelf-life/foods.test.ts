@@ -177,8 +177,8 @@ describe("matchFoodType", () => {
     ["daikon", "daikon"],
     ["radishes", "radish"],
     // Cooked and leftover lines only match cooked food
-    ["cooked lentils", "cooked-veg"],
-    ["leftover lentils", "cooked-veg"],
+    ["cooked lentils", "cooked-legumes"],
+    ["leftover lentils", "cooked-legumes"],
     ["cooked potatoes", "cooked-veg"],
     ["cooked chicken", "cooked-chicken"],
     ["cooked prawns", "prawns-cooked"],

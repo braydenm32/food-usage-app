@@ -34,6 +34,10 @@ function metricQty(n: number): string {
 
 export function formatAmount(quantity: number | undefined, unit?: string, quantityMax?: number): string {
   if (quantity === undefined) return "";
+  // Less than a kilo or litre reads better small: 0.06 kg is 60 g.
+  if ((unit === "kg" || unit === "L") && quantity > 0 && Math.max(quantity, quantityMax ?? 0) < 1) {
+    return formatAmount(Math.round(quantity * 1000), unit === "kg" ? "g" : "ml", quantityMax === undefined ? undefined : Math.round(quantityMax * 1000));
+  }
   const metric = !!unit && /^(g|ml)$/.test(unit);
   const f = metric ? metricQty : formatQty;
   const q = quantityMax !== undefined && quantityMax > quantity ? `${f(quantity)}–${f(quantityMax)}` : f(quantity);

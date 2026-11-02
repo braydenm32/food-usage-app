@@ -16,6 +16,13 @@ describe("formatQuantity", () => {
     expect(formatQuantity(1.5, "L")).toBe("1½ L");
     expect(formatQuantity(2, "tin")).toBe("2 tins");
   });
+
+  it("shows less than a kilo or litre in grams or ml", () => {
+    expect(formatQuantity(0.06, "kg")).toBe("60 g");
+    expect(formatQuantity(0.5, "kg")).toBe("500 g");
+    expect(formatQuantity(0.25, "L")).toBe("250 ml");
+    expect(formatQuantity(1, "kg")).toBe("1 kg");
+  });
 });
 
 describe("wasteTotals", () => {

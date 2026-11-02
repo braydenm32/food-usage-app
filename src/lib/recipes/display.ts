@@ -1,6 +1,6 @@
 import type { Diet, Recipe } from "@/lib/types";
 import { getFoodType } from "@/lib/shelf-life/foods";
-import { exclusionReason } from "./filter";
+import { exclusionReason, labelChecks } from "./filter";
 import { isStaple } from "./suggest";
 
 const TAG_LABELS: Record<string, string> = {
@@ -25,14 +25,18 @@ export function tagLabel(tag: string): string {
 
 const DIET_TAGS: Diet[] = ["vegetarian", "vegan", "gluten-free", "dairy-free", "low-carb"];
 
-/** Tags worth showing: diet tags only when the ingredients agree, no duplicates. */
+/** Tags worth showing: diet tags only when the ingredients agree (and need no label check), no duplicates. */
 export function visibleTags(recipe: Recipe, max = 5): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of recipe.tags) {
     const t = raw.trim().toLowerCase();
     if (!t) continue;
-    if ((DIET_TAGS as string[]).includes(t) && exclusionReason(recipe, { diets: [t as Diet], allergies: [], dislikes: [] })) continue;
+    if ((DIET_TAGS as string[]).includes(t)) {
+      // Don't claim a diet the ingredients disagree with, or one we'd ask them to check the label for.
+      const diet = { diets: [t as Diet], allergies: [], dislikes: [] };
+      if (exclusionReason(recipe, diet) || labelChecks(recipe, diet).length > 0) continue;
+    }
     const label = tagLabel(t);
     if (seen.has(label)) continue;
     seen.add(label);

@@ -222,7 +222,12 @@ export function ReviewList({
           <p className="font-display text-xl text-ink">
             {food.length} foods, all matched
           </p>
-          {spread && <p className="mt-0.5 text-[15px] text-ink-2">{spread}</p>}
+          {spread && (
+            <p className="mt-0.5 text-[15px] text-ink-2">
+              {spread}
+              {addCount > included.length && ` · ${addCount} items counting packs`}
+            </p>
+          )}
           <button
             type="button"
             aria-expanded={showAll}
@@ -238,7 +243,10 @@ export function ReviewList({
       {!collapsed && food.length > 1 && (
         <div className="mb-2 flex items-center justify-between gap-3 px-5 lg:px-0">
           <p className="text-sm text-ink-2">
-            {includedFood} of {food.length} ticked{total > 0 && <> · ${total.toFixed(2)}</>}
+            {includedFood} of {food.length} ticked
+            {/* Multi-packs become one item per pack, so say why the button's count is higher. */}
+            {addCount > included.length && <> · {addCount} items counting packs</>}
+            {total > 0 && <> · ${total.toFixed(2)}</>}
           </p>
           <button
             type="button"

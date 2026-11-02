@@ -304,7 +304,9 @@ export function labelChecks(recipe: Recipe, profile: FilterProfile): LabelCheck[
       out.push({ ingredient: ing.name, reason: "may contain gluten" });
       continue;
     }
-    if (veg && !/\b(?:vegan|vegetarian|plant based)\b/.test(t) && (VEGETARIAN_RISK.test(t) || (vegan && VEGAN_RISK.test(t)))) {
+    // Vegetable stock is the vegetarian stock; only meat-free-unclear stock is worth a check.
+    const v = t.replace(/\b(?:vegetable|veg|veggie|mushroom)\s+(?:stock|broth|bouillon)(?:\s+(?:cubes?|powder))?\b/g, " ");
+    if (veg && !/\b(?:vegan|vegetarian|plant based)\b/.test(v) && (VEGETARIAN_RISK.test(v) || (vegan && VEGAN_RISK.test(v)))) {
       out.push({ ingredient: ing.name, reason: vegan ? "may not be vegan" : "may not be vegetarian" });
     }
   }

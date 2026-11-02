@@ -33,6 +33,12 @@ describe("I cooked this: starting deductions", () => {
     expect(defaultDeduction(ing("tinned tomatoes", 400, "g", "tinned-tomatoes"), item("Tomatoes", "tinned-tomatoes", 3, "tin"), 1)).toBe(1);
   });
 
+  it("shows less than a kilo or litre in grams or ml", () => {
+    expect(formatAmount(0.06, "kg")).toBe("60g");
+    expect(formatAmount(0.25, "L")).toBe("250ml");
+    expect(formatAmount(1.5, "kg")).toBe("1½kg");
+  });
+
   it("spills the rest onto the next matching item", () => {
     const recipe: Recipe = { id: "r", title: "Mince", source: "builtin", servings: 4, ingredients: [ing("beef mince", 500, "g", "beef-mince")], steps: [], tags: [] };
     const items = [item("Beef mince", "beef-mince", 300, "g", "a"), item("Beef mince", "beef-mince", 500, "g", "b")];

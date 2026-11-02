@@ -596,7 +596,7 @@ function ListRow({
             {item.name}
           </span>
           {have && !item.checked ? (
-            <span className="block truncate text-xs font-medium text-soon">Already have {have}</span>
+            <span className="block text-xs font-medium text-soon [overflow-wrap:anywhere]">Already have {have}</span>
           ) : (
             why && <span className="block truncate text-xs text-ink-3">{why}</span>
           )}
