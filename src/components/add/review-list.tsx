@@ -6,7 +6,7 @@ import { Button, Chip, IconButton, cx } from "@/components/ui";
 import { useLarder } from "@/lib/store";
 import { useNow } from "@/lib/use-now";
 import { applyFoodType, checkPrintedDate, convertQuantity, findMergeTarget, type ReviewDraft } from "@/lib/drafts";
-import { computeExpiry, describeDaysLeft, isHighRisk, parseLocalDate } from "@/lib/shelf-life/engine";
+import { computeExpiry, describeDaysLeft, isHighRisk, parseLocalDate, soonDaysFor } from "@/lib/shelf-life/engine";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { formatQuantity } from "@/components/pantry/format";
 import type { DateKind, PantryItem, ShelfLifeOverride, StorageLocation, Unit } from "@/lib/types";
@@ -180,11 +180,13 @@ export function ReviewList({
       frozenAt: loc?.kind === "freezer" ? at : undefined,
       source: "manual",
     };
+    const food = getFoodType(d.foodTypeId);
+    const override = d.foodTypeId ? (overrides as Record<string, ShelfLifeOverride>)[d.foodTypeId] : undefined;
     const info = computeExpiry(item, {
-      food: getFoodType(d.foodTypeId),
-      override: d.foodTypeId ? (overrides as Record<string, ShelfLifeOverride>)[d.foodTypeId] : undefined,
+      food,
+      override,
       location: loc,
-      useSoonDays,
+      useSoonDays: soonDaysFor(item, { food, override, location: loc, useSoonDays }),
       now: new Date(now),
     });
     const text = describeDaysLeft(info, d.dateKind).replace(/ left$/, "");

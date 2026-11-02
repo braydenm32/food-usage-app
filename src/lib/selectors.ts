@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { sameStapleFood, useLarder } from "@/lib/store";
 import { useNow } from "@/lib/use-now";
-import { computeExpiry, isHighRisk, parseLocalDate, STATUS_ORDER, toLocalISODate, type ExpiryInfo } from "@/lib/shelf-life/engine";
+import { computeExpiry, parseLocalDate, soonDaysFor, STATUS_ORDER, toLocalISODate, type ExpiryInfo } from "@/lib/shelf-life/engine";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import type { FoodType, PantryItem, Staple, StorageLocation } from "@/lib/types";
 
@@ -14,19 +14,8 @@ export interface ItemView {
   expiry: ExpiryInfo;
 }
 
-/**
- * Raw meat and fish, and cooked leftovers: foods where "about 3 days" is the real risk.
- * They show in "Eat me first" a day earlier than everything else.
- */
-export function isHighRiskFood(item: Pick<PantryItem, "name">, food: FoodType | undefined): boolean {
-  if (!food) return isHighRisk(item.name);
-  if (food.category === "meat" || food.category === "seafood") return food.dateKind === "use-by";
-  // Leftovers and cooked foods are filed under "other" with a use-by date.
-  return food.category === "other" && food.dateKind === "use-by" && food.defaultLocation === "fridge";
-}
-
-/** Extra "use soon" days for high-risk foods (see `isHighRiskFood`). */
-export const HIGH_RISK_EXTRA_DAYS = 1;
+// Re-exported: the rule lives with the engine so the push sender (server) shares it.
+export { HIGH_RISK_EXTRA_DAYS, isHighRiskFood } from "@/lib/shelf-life/engine";
 
 export function viewItem(
   item: PantryItem,
@@ -35,13 +24,12 @@ export function viewItem(
 ): ItemView {
   const food = getFoodType(item.foodTypeId);
   const location = state.locations.find((l) => l.id === item.locationId);
-  // High-risk foods outside the freezer surface a day earlier.
-  const early = location?.kind !== "freezer" && isHighRiskFood(item, food);
+  const override = item.foodTypeId ? state.overrides[item.foodTypeId] : undefined;
   const expiry = computeExpiry(item, {
     food,
-    override: item.foodTypeId ? state.overrides[item.foodTypeId] : undefined,
+    override,
     location,
-    useSoonDays: state.settings.useSoonDays + (early ? HIGH_RISK_EXTRA_DAYS : 0),
+    useSoonDays: soonDaysFor(item, { food, override, location, useSoonDays: state.settings.useSoonDays }),
     now,
   });
   return { item, food, location, expiry };

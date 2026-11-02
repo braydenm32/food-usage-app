@@ -39,6 +39,40 @@ export function isHighRisk(name: string): boolean {
   return HIGH_RISK.test(name) && !SHELF_STABLE.test(name);
 }
 
+/**
+ * Raw meat and fish, and cooked leftovers: foods where "about 3 days" is the real risk.
+ * They show in "Eat me first" a day earlier than everything else (see `soonDaysFor`).
+ */
+export function isHighRiskFood(item: Pick<PantryItem, "name">, food: FoodType | undefined): boolean {
+  if (!food) return isHighRisk(item.name);
+  if (food.category === "meat" || food.category === "seafood") return food.dateKind === "use-by";
+  // Leftovers and cooked foods are filed under "other" with a use-by date.
+  return food.category === "other" && food.dateKind === "use-by" && food.defaultLocation === "fridge";
+}
+
+/** Extra "use soon" days for high-risk foods (see `isHighRiskFood`). */
+export const HIGH_RISK_EXTRA_DAYS = 1;
+
+/**
+ * The "use soon" window for one item: the household setting, plus a day for high-risk food
+ * outside the freezer. The one place this rule lives (Larder, Add review, merge checks, push).
+ *
+ * The extra day applies to a printed date (3 days left on raw salmon is worth a nudge), but not
+ * to an estimate that is already that short: raw mince is estimated at 2 days, so the base
+ * window already flags it, and the extra would only mark 3-day leftovers "use soon" the moment
+ * they go in the fridge.
+ */
+export function soonDaysFor(
+  item: Pick<PantryItem, "name" | "printedDate">,
+  opts: { food?: FoodType; override?: ShelfLifeOverride; location?: Pick<StorageLocation, "kind">; useSoonDays: number },
+): number {
+  const kind = opts.location?.kind ?? "fridge";
+  const base = opts.useSoonDays;
+  if (kind === "freezer" || !isHighRiskFood(item, opts.food)) return base;
+  if (item.printedDate) return base + HIGH_RISK_EXTRA_DAYS;
+  return storageDays(opts.food, opts.override, kind, item.name) > base + HIGH_RISK_EXTRA_DAYS ? base + HIGH_RISK_EXTRA_DAYS : base;
+}
+
 export interface UnknownDefaults {
   /** Default storage spot id (always a built-in spot). */
   locationId: "fridge";

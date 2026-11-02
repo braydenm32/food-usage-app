@@ -2,7 +2,7 @@
 // Shared by the client (add flow) and the server (API routes), so no React or store imports here.
 // Relative imports keep this file loadable by vitest without path-alias config.
 
-import { computeExpiry, daysBetween, defaultsForUnknown, parseLocalDate, storageDays } from "./shelf-life/engine";
+import { computeExpiry, daysBetween, defaultsForUnknown, parseLocalDate, soonDaysFor, storageDays } from "./shelf-life/engine";
 import { getFoodType, matchFoodType } from "./shelf-life/foods";
 import type { DraftItem, FoodType, ItemEvent, LocationId, PantryItem, ShelfLifeOverride, StorageLocation, Unit } from "./types";
 
@@ -515,7 +515,8 @@ function freshEnoughToTopUp(item: PantryItem, ctx: MergeContext): boolean {
   const food = getFoodType(item.foodTypeId);
   const override = item.foodTypeId ? ctx.overrides?.[item.foodTypeId] : undefined;
   const location = ctx.locations.find((l) => l.id === item.locationId);
-  const info = computeExpiry(item, { food, override, location, useSoonDays: ctx.useSoonDays, now });
+  const useSoonDays = soonDaysFor(item, { food, override, location, useSoonDays: ctx.useSoonDays ?? 2 });
+  const info = computeExpiry(item, { food, override, location, useSoonDays, now });
   if (info.status !== "fresh") return false;
   if (!info.estimated) return true;
   const life = storageDays(food, override, location?.kind ?? "fridge", item.name);

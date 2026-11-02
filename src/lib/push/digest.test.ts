@@ -43,4 +43,21 @@ describe("householdDigest", () => {
     expect(v[0].location?.name).toBe("Chest freezer");
     expect(v[0].expiry.status).toBe("fresh");
   });
+
+  it("counts estimates from the day food was added in the household's zone", () => {
+    // 1 am Sunday 1 Nov in Sydney is still 31 Oct in UTC. Unknown food: 5 fridge days from Sydney's 1 Nov.
+    const rows = [item("Mystery dip", { dateKind: "best-before", addedAt: "2026-10-31T14:00:00Z" })];
+    const v = householdViews(rows, opts);
+    expect(v[0].expiry.daysLeft).toBe(4);
+  });
+
+  it("flags high-risk food a day early, like the app", () => {
+    const rows = [
+      item("Salmon fillets", { foodTypeId: "salmon-fillet", printedDate: "2026-11-05" }),
+      item("Mystery jam", { dateKind: "best-before", printedDate: "2026-11-05" }),
+    ];
+    const v = householdViews(rows, opts);
+    expect(v.find((x) => x.item.name === "Salmon fillets")?.expiry.status).toBe("use-soon");
+    expect(v.find((x) => x.item.name === "Mystery jam")?.expiry.status).toBe("fresh");
+  });
 });

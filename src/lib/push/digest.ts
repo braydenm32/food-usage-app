@@ -5,7 +5,7 @@
  */
 import { buildDigest, type Digest } from "@/lib/reminders";
 import type { ItemView } from "@/lib/selectors";
-import { computeExpiry, parseLocalDate, STATUS_ORDER } from "@/lib/shelf-life/engine";
+import { computeExpiry, parseLocalDate, soonDaysFor, STATUS_ORDER } from "@/lib/shelf-life/engine";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import type { PantryItem, ShelfLifeOverride, StorageLocation } from "@/lib/types";
 import { zonedDateISO } from "@/lib/push/schedule";
@@ -53,11 +53,29 @@ function byUrgency(a: ItemView, b: ItemView): number {
   );
 }
 
+const TIMESTAMPS = ["addedAt", "openedAt", "frozenAt", "thawedAt"] as const;
+
+/**
+ * The engine reads timestamps in the runtime's local calendar. Rebase each one to a local
+ * midnight on the date it fell on in the household's zone, so milk added at 11 pm in Sydney
+ * counts from that Sydney day, not the server's (UTC) one. Only the day matters to the engine.
+ */
+export function rebaseToZone(item: PantryItem, timeZone: string): PantryItem {
+  const out: PantryItem = { ...item };
+  for (const k of TIMESTAMPS) {
+    const v = out[k];
+    if (!v) continue;
+    const t = new Date(v);
+    if (Number.isNaN(t.getTime())) continue;
+    out[k] = parseLocalDate(zonedDateISO(t, timeZone)).toISOString();
+  }
+  return out;
+}
+
 /**
  * Item views for a household on its local "today". The engine works in the runtime's local
- * calendar, so today's date in the household's zone is handed to it as a local midnight.
- * Timestamps such as `addedAt` are still read in the server's zone, which can shift an
- * estimate by a day for food added late at night; printed dates are exact.
+ * calendar, so today's date in the household's zone is handed to it as a local midnight, and
+ * item timestamps are rebased the same way (see `rebaseToZone`). Printed dates are exact.
  */
 export function householdViews(rows: RecordRow[], opts: { useSoonDays: number; now: Date; timeZone: string }): ItemView[] {
   const locations = new Map(BUILT_IN.map((l) => [l.id, l]));
@@ -79,11 +97,13 @@ export function householdViews(rows: RecordRow[], opts: { useSoonDays: number; n
     .map((item) => {
       const food = getFoodType(item.foodTypeId);
       const location = locations.get(item.locationId) ?? BUILT_IN[0];
-      const expiry = computeExpiry(item, {
+      const override = item.foodTypeId ? overrides.get(item.foodTypeId) : undefined;
+      // Same window as the app (high-risk food a day earlier), so a push matches the Today screen.
+      const expiry = computeExpiry(rebaseToZone(item, opts.timeZone), {
         food,
-        override: item.foodTypeId ? overrides.get(item.foodTypeId) : undefined,
+        override,
         location,
-        useSoonDays: opts.useSoonDays,
+        useSoonDays: soonDaysFor(item, { food, override, location, useSoonDays: opts.useSoonDays }),
         now: today,
       });
       return { item, food, location, expiry };

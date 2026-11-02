@@ -42,6 +42,19 @@ describe("high-risk foods", () => {
     expect(milk.expiry.status).toBe("fresh");
   });
 
+  it("raw mince just added is use soon (not use today), and fresh leftovers aren't flagged at once", () => {
+    const now = new Date(2026, 10, 2);
+    const mince = viewItem(item({ name: "Beef mince", foodTypeId: "beef-mince", unit: "g", quantity: 500, addedAt: now.toISOString() }), state, now);
+    expect(mince.expiry.daysLeft).toBe(2);
+    expect(mince.expiry.status).toBe("use-soon");
+    const leftovers = viewItem(item({ name: "Leftovers", foodTypeId: "leftovers-meal", unit: "item", addedAt: now.toISOString() }), state, now);
+    expect(leftovers.expiry.daysLeft).toBe(3);
+    expect(leftovers.expiry.status).toBe("fresh");
+    // A day later both are in the window.
+    const tomorrow = new Date(2026, 10, 3);
+    expect(viewItem(leftovers.item, state, tomorrow).expiry.status).toBe("use-soon");
+  });
+
   it("doesn't widen the window in the freezer", () => {
     const now = new Date(2026, 10, 2);
     const v = viewItem(item({ name: "Salmon", foodTypeId: "salmon-fillet", locationId: "freezer", frozenAt: now.toISOString(), printedDate: undefined }), state, now);
