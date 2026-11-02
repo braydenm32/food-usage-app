@@ -147,6 +147,68 @@ export type Database = {
         }
         Relationships: []
       }
+      push_subscriptions: {
+        Row: {
+          auth: string
+          cadence: string
+          created_at: string
+          endpoint: string
+          failures: number
+          hour: number
+          household_id: string
+          id: string
+          last_sent_at: string | null
+          p256dh: string
+          time_zone: string
+          updated_at: string
+          use_soon_days: number
+          user_id: string
+          weekday: number
+        }
+        Insert: {
+          auth: string
+          cadence?: string
+          created_at?: string
+          endpoint: string
+          failures?: number
+          hour?: number
+          household_id: string
+          id?: string
+          last_sent_at?: string | null
+          p256dh: string
+          time_zone?: string
+          updated_at?: string
+          use_soon_days?: number
+          user_id: string
+          weekday?: number
+        }
+        Update: {
+          auth?: string
+          cadence?: string
+          created_at?: string
+          endpoint?: string
+          failures?: number
+          hour?: number
+          household_id?: string
+          id?: string
+          last_sent_at?: string | null
+          p256dh?: string
+          time_zone?: string
+          updated_at?: string
+          use_soon_days?: number
+          user_id?: string
+          weekday?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "push_subscriptions_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -172,6 +234,20 @@ export type Database = {
       pull_household_records: {
         Args: { after_seq: number; hid: string; max_rows?: number }
         Returns: Json
+      }
+      save_push_subscription: {
+        Args: {
+          hid: string
+          sub_auth: string
+          sub_cadence: string
+          sub_endpoint: string
+          sub_hour: number
+          sub_p256dh: string
+          sub_time_zone: string
+          sub_use_soon_days?: number
+          sub_weekday?: number
+        }
+        Returns: string
       }
     }
     Enums: {
