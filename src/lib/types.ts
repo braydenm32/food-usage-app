@@ -71,7 +71,7 @@ export interface FoodType {
   tip?: string;
 }
 
-export type Unit = "item" | "g" | "kg" | "ml" | "L" | "pack" | "bunch" | "dozen" | "loaf" | "tin" | "jar" | "bottle";
+export type Unit = "item" | "g" | "kg" | "ml" | "L" | "pack" | "bunch" | "dozen" | "loaf" | "tin" | "jar" | "bottle" | "bag" | "punnet" | "tub" | "tray";
 
 export type ItemStatus = "fresh" | "use-soon" | "use-today" | "expired";
 
@@ -100,7 +100,7 @@ export interface PantryItem {
    */
   expiredWhenFrozen?: boolean;
   /** Where the item came from. */
-  source: "receipt" | "list" | "barcode" | "manual" | "order";
+  source: "receipt" | "list" | "barcode" | "manual" | "order" | "putaway";
   barcode?: string;
   notes?: string;
 }
@@ -238,4 +238,19 @@ export interface DraftItem {
   dateKind: DateKind;
   include: boolean;
   confidence?: "high" | "medium" | "low";
+  /** Product barcode this line came from (barcode scans), saved on the item and remembered. */
+  barcode?: string;
+  /** Separate packs of `quantity` each ("2x milk 2L" is 2 packs of 2 L); added as that many items. */
+  packs?: number;
+}
+
+/** What a household told us a barcode is, so the next scan of it needs no lookup or matching. */
+export interface BarcodeMemory {
+  foodTypeId: string | null;
+  name: string;
+  emoji: string;
+  unit: Unit;
+  quantity: number;
+  /** ISO date-time it was last saved. */
+  at: string;
 }

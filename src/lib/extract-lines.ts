@@ -6,7 +6,7 @@ import { AI_MODEL, getAnthropic } from "@/lib/ai";
 import { lineToDraft, normaliseUnit, type ParsedLine, type ReviewDraft } from "@/lib/drafts";
 
 /* Structured output from Claude: one entry per line on the receipt / list / email. */
-const UNIT_VALUES = ["item", "g", "kg", "ml", "L", "pack", "bunch", "dozen", "loaf", "tin", "jar", "bottle"] as const;
+const UNIT_VALUES = ["item", "g", "kg", "ml", "L", "pack", "bunch", "dozen", "loaf", "tin", "jar", "bottle", "bag", "punnet", "tub", "tray"] as const;
 
 const ExtractedLine = z.object({
   rawText: z.string().describe("The line exactly as printed or written, e.g. 'WW RSPBRY 125G'"),
