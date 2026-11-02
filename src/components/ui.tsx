@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import Link from "next/link";
-import { X, Minus, Plus, Settings as SettingsIcon } from "lucide-react";
+import { ChevronLeft, X, Minus, Plus, Settings as SettingsIcon } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -95,15 +95,27 @@ export function PageHeader({
   subtitle,
   actions,
   showSettings,
+  back,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
   showSettings?: boolean;
+  /** A labelled back link shown top-left, above the title ("‹ Your kitchen"). */
+  back?: { href: string; label: string };
 }) {
   return (
     <header className="flex items-end justify-between gap-4 px-5 pb-4 pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-0 lg:pt-10">
       <div className="min-w-0">
+        {back && (
+          <Link
+            href={back.href}
+            className="-ml-2 mb-1 inline-flex min-h-11 items-center gap-0.5 rounded-full pl-1 pr-3 text-[15px] font-semibold text-primary hover:bg-surface-2"
+          >
+            <ChevronLeft size={20} aria-hidden />
+            {back.label}
+          </Link>
+        )}
         <h1 className="font-display text-[2rem] leading-tight text-ink lg:text-[2.5rem]">{title}</h1>
         {subtitle && <p className="mt-1 text-[15px] text-ink-2">{subtitle}</p>}
       </div>

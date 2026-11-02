@@ -3,21 +3,24 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, Camera, ChefHat, Check, ClipboardList, Leaf, PencilLine } from "lucide-react";
+import { CalendarCheck, CalendarDays, Camera, ChefHat, ChevronRight, ClipboardList, Leaf, PencilLine, Snowflake } from "lucide-react";
 import { useLarder, DEFAULT_PROFILE } from "@/lib/store";
 import { useItemViews, type ItemView } from "@/lib/selectors";
 import { describeDaysLeft } from "@/lib/shelf-life/engine";
 import { useHydrated } from "@/lib/use-hydrated";
+import { useNow } from "@/lib/use-now";
 import { Button, Card, EmptyState, PageHeader, SectionTitle, buttonClass, cx } from "@/components/ui";
 import { STATUS_META } from "@/components/freshness";
 import { ItemSheet, type SheetIntent } from "@/components/item-sheet";
 import { InstallCard } from "@/components/install-card";
-import { binMany, capitalise, markBinned, markUsed } from "@/components/pantry/actions";
-import { formatAUD, formatQuantity, startOfMonth, wasteTotals } from "@/components/pantry/format";
+import { binMany, canFreeze, capitalise, freezeItem, markBinned } from "@/components/pantry/actions";
+import { formatQuantity, startOfMonth, wasteTotals } from "@/components/pantry/format";
 import { ItemRow } from "@/components/pantry/item-row";
 import { OverflowMenu } from "@/components/pantry/overflow-menu";
-import { WasteSplitBar } from "@/components/pantry/waste-bar";
+import { UseButton } from "@/components/pantry/use-button";
+import { DateCheck, needsDateCheck } from "@/components/pantry/date-check";
 import { keepFocusNear } from "@/components/pantry/focus";
+import { FreezePrompt, FridgeCheck } from "@/components/fridge-check";
 
 function greeting(hour: number) {
   if (hour >= 5 && hour < 12) return "Good morning";
@@ -25,7 +28,8 @@ function greeting(hour: number) {
   return "Good evening";
 }
 
-/** How many urgent items get a full card on desktop; the rest are compact rows. */
+/** How many urgent items get a full card; the rest are compact rows underneath. */
+const MOBILE_CARDS = 2;
 const DESKTOP_CARDS = 4;
 
 type Open = (id: string, intent?: SheetIntent) => void;
@@ -68,11 +72,17 @@ export default function TodayPage() {
     // data-wide lets the shell give the two-column dashboard more room on desktop.
     <div data-wide={dashboard || undefined}>
       <PageHeader
-        title={now ? greeting(now.getHours()) : <span className="invisible">Hello</span>}
-        subtitle={now ? [name, dateline].filter(Boolean).join(" · ") : <span className="invisible">Today</span>}
+        title={
+          now ? (
+            greeting(now.getHours())
+          ) : (
+            // Same height as the greeting, so nothing moves when it arrives.
+            <span aria-label="Today" className="inline-block h-[1.1em] w-56 max-w-full rounded-full bg-surface-2 align-[-0.15em]" />
+          )
+        }
+        subtitle={now ? [name, dateline].filter(Boolean).join(" · ") : <span className="inline-block h-[1em] w-44 rounded-full bg-surface-2/70 align-middle" />}
         showSettings
         actions={
-          // Insights is linked from "This month" below (and the Larder header); the rail has both on desktop.
           hydrated && planner ? (
             <Link href="/plan" aria-label="Meal plan" title="Meal plan" className={headerLink}>
               <CalendarDays size={22} aria-hidden />
@@ -94,16 +104,27 @@ export default function TodayPage() {
   );
 }
 
+/** Mirrors the loaded dashboard: "Eat me first" cards, a few rows, and the glance tiles. */
 function TodaySkeleton() {
   return (
-    <div aria-busy="true" aria-label="Loading your larder" className="flex flex-col gap-4">
-      <div className="h-6 w-40 rounded-full bg-surface-2" />
-      <div className="flex gap-3 overflow-hidden">
-        {[0, 1].map((i) => (
-          <div key={i} className="h-52 w-[78%] max-w-80 shrink-0 rounded-[var(--radius-card)] bg-surface-2/70" />
-        ))}
+    <div aria-busy="true" aria-label="Loading your larder" className="flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-10">
+      <div>
+        <SectionTitle>Eat me first</SectionTitle>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="h-44 rounded-[var(--radius-card)] bg-surface-2/70" />
+          ))}
+        </div>
+        <div className="mt-3 flex flex-col gap-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="h-[68px] rounded-2xl bg-surface-2/50" />
+          ))}
+        </div>
       </div>
-      <div className="h-24 rounded-[var(--radius-card)] bg-surface-2/70" />
+      <div>
+        <SectionTitle>At a glance</SectionTitle>
+        <div className="h-[84px] rounded-[var(--radius-card)] bg-surface-2/70" />
+      </div>
     </div>
   );
 }
@@ -176,83 +197,103 @@ function FirstRun() {
 }
 
 function Dashboard({ views, onOpen }: { views: ItemView[]; onOpen: Open }) {
+  const nowMs = useNow();
   const urgent = views.filter((v) => v.expiry.status === "use-today" || v.expiry.status === "use-soon");
   const expired = views.filter((v) => v.expiry.status === "expired");
   const nextUp = views.find((v) => v.expiry.status === "fresh");
-  const rest = urgent.slice(DESKTOP_CARDS);
+  const cards = urgent.slice(0, DESKTOP_CARDS);
+  const rows = urgent.slice(MOBILE_CARDS);
 
   return (
     <div className="flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start lg:gap-10">
-      <section aria-labelledby="eat-first" className="min-w-0">
-        <SectionTitle
-          action={
-            urgent.length > 0 && <span className="text-sm text-ink-2">{urgent.length === 1 ? "1 item" : `${urgent.length} items`}</span>
-          }
-        >
-          <span id="eat-first" tabIndex={-1} className="rounded-lg">
-            Eat me first
-          </span>
-        </SectionTitle>
-        {urgent.length > 0 ? (
-          <>
-            <ul className="scrollbar-none -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-3 overflow-x-auto px-5 pb-2 lg:mx-0 lg:grid lg:grid-cols-2 lg:overflow-visible lg:px-0 lg:pb-0">
-              {urgent.map((v) => (
-                <EatFirstCard key={v.item.id} view={v} onOpen={onOpen} />
-              ))}
-            </ul>
-            {rest.length > 0 && (
-              <div className="mt-6 hidden lg:block">
-                <h3 className="mb-1 text-sm font-semibold text-ink-2">Also coming up</h3>
-                <ul className="-mx-2 flex flex-col">
-                  {rest.map((v) => (
-                    <ItemRow key={v.item.id} view={v} onOpen={onOpen} focusFallback={todayHeading} />
-                  ))}
-                </ul>
-              </div>
-            )}
-          </>
-        ) : (
-          <Card className="flex items-center gap-4 p-4">
-            <span aria-hidden className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-fresh-soft text-fresh">
-              <Leaf size={24} />
+      <div className="flex min-w-0 flex-col gap-8">
+        <section aria-labelledby="eat-first" className="min-w-0">
+          <SectionTitle
+            action={
+              urgent.length > 0 && (
+                <Link href="/pantry?due=soon" className="inline-flex min-h-11 items-center gap-0.5 rounded-lg text-sm font-semibold text-primary hover:underline">
+                  {urgent.length === 1 ? "1 item" : `${urgent.length} items`}
+                  <ChevronRight size={16} aria-hidden />
+                  <span className="sr-only"> to use soon, in the larder</span>
+                </Link>
+              )
+            }
+          >
+            <span id="eat-first" tabIndex={-1} className="rounded-lg">
+              Eat me first
             </span>
-            <div className="min-w-0">
-              <p className="font-semibold text-ink">Nothing needs eating today</p>
-              {nextUp && (
-                <p className="text-sm text-ink-2">
-                  Next up: {nextUp.item.name}, {describeDaysLeft(nextUp.expiry, nextUp.item.dateKind)}.
-                </p>
+          </SectionTitle>
+          {urgent.length > 0 ? (
+            <>
+              <ul className="grid gap-3 lg:grid-cols-2">
+                {cards.map((v, i) => (
+                  <EatFirstCard key={v.item.id} view={v} onOpen={onOpen} className={i >= MOBILE_CARDS ? "max-lg:hidden" : undefined} />
+                ))}
+              </ul>
+              {rows.length > 0 && (
+                <div className={cx("mt-4", urgent.length <= DESKTOP_CARDS && "lg:hidden")}>
+                  <h3 className="mb-1 text-sm font-semibold text-ink-2">Also coming up</h3>
+                  <ul className="-mx-2 flex flex-col divide-y divide-line">
+                    {rows.map((v, i) => (
+                      // On desktop the first rows are already cards.
+                      <ItemRow
+                        key={v.item.id}
+                        view={v}
+                        onOpen={onOpen}
+                        focusFallback={todayHeading}
+                        className={i < DESKTOP_CARDS - MOBILE_CARDS ? "lg:hidden" : undefined}
+                      />
+                    ))}
+                  </ul>
+                </div>
               )}
-            </div>
-          </Card>
-        )}
-      </section>
+            </>
+          ) : (
+            <Card className="flex items-center gap-4 p-4">
+              <span aria-hidden className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-fresh-soft text-fresh">
+                <Leaf size={24} />
+              </span>
+              <div className="min-w-0">
+                <p className="font-semibold text-ink">Nothing needs eating today</p>
+                {nextUp && (
+                  <p className="text-sm text-ink-2">
+                    Next up: {nextUp.item.name}, {describeDaysLeft(nextUp.expiry, nextUp.item.dateKind)}.
+                  </p>
+                )}
+              </div>
+            </Card>
+          )}
+        </section>
+        <FreezePrompt views={views} now={nowMs} />
+        <FridgeCheck views={views} now={nowMs} />
+      </div>
 
       <div className="flex flex-col gap-8">
         {expired.length > 0 && <CheckThese views={expired} onOpen={onOpen} />}
         <Summary views={views} />
-        <MonthInsight />
+        <KitchenCard />
         <InstallCard />
       </div>
     </div>
   );
 }
 
-function EatFirstCard({ view, onOpen }: { view: ItemView; onOpen: Open }) {
+function EatFirstCard({ view, onOpen, className }: { view: ItemView; onOpen: Open; className?: string }) {
   const { item, location, expiry } = view;
   const meta = STATUS_META[expiry.status];
   const days = capitalise(describeDaysLeft(expiry, item.dateKind));
   const details = [formatQuantity(item.quantity, item.unit), location?.name, item.openedAt && "Opened"].filter(Boolean).join(" · ");
+  const check = needsDateCheck(view);
+  const freezable = canFreeze(view);
+  const [checking, setChecking] = useState(false);
   return (
-    // On desktop only the first few are cards; the rest show as rows below.
-    <li className={cx("w-[78%] max-w-80 shrink-0 snap-start lg:w-auto lg:max-w-none", "lg:[&:nth-child(n+5)]:hidden")}>
+    <li className={className}>
       <Card className="flex h-full flex-col p-4">
         <button
           type="button"
           data-row-focus={item.id}
           onClick={() => onOpen(item.id)}
           className="-m-1 flex flex-1 flex-col items-start rounded-2xl p-1 text-left"
-          aria-label={`${item.name}, ${days}, ${details}. Open details`}
         >
           <span className="flex w-full items-center gap-3">
             <span
@@ -261,26 +302,18 @@ function EatFirstCard({ view, onOpen }: { view: ItemView; onOpen: Open }) {
             >
               {item.emoji}
             </span>
-            <span className="line-clamp-2 min-w-0 font-display text-xl leading-snug text-ink">{item.name}</span>
+            <span className="flex min-w-0 flex-col">
+              <span className="line-clamp-2 font-display text-xl leading-snug text-ink">{item.name}</span>
+              <span className={cx("inline-flex items-center gap-1.5 text-[15px] font-semibold", meta.text)}>
+                <meta.Icon size={16} aria-hidden strokeWidth={2.5} />
+                {days}
+              </span>
+              <span className="text-sm text-ink-2">{details}</span>
+            </span>
           </span>
-          <span className={cx("mt-3 inline-flex items-center gap-1.5 text-[15px] font-semibold", meta.text)}>
-            <meta.Icon size={16} aria-hidden strokeWidth={2.5} />
-            {days}
-          </span>
-          <span className="mt-0.5 text-sm text-ink-2">{details}</span>
         </button>
         <div className="mt-4 flex gap-2">
-          <Button
-            size="sm"
-            className="h-11 flex-1 whitespace-nowrap px-3"
-            onClick={(e) => {
-              keepFocusNear(e.currentTarget, todayHeading);
-              markUsed(item.id);
-            }}
-          >
-            <Check size={16} aria-hidden strokeWidth={2.5} />
-            Used it
-          </Button>
+          <UseButton item={item} look="card" beforeRemove={(el) => keepFocusNear(el, todayHeading)} />
           <Link
             href={`/recipes?use=${encodeURIComponent(item.id)}`}
             className={cx(buttonClass("secondary", "sm"), "h-11 flex-1 whitespace-nowrap px-3")}
@@ -289,6 +322,23 @@ function EatFirstCard({ view, onOpen }: { view: ItemView; onOpen: Open }) {
             Cook with it
           </Link>
         </div>
+        {(freezable || check) && (
+          <div className="-mb-1 mt-2 flex flex-wrap gap-x-1">
+            {freezable && (
+              <Button size="sm" variant="ghost" className="h-11 px-2.5" onClick={() => freezeItem(item.id)}>
+                <Snowflake size={16} aria-hidden />
+                Freeze it
+              </Button>
+            )}
+            {check && (
+              <Button size="sm" variant="ghost" className="h-11 px-2.5" aria-expanded={checking} onClick={() => setChecking((c) => !c)}>
+                <CalendarCheck size={16} aria-hidden />
+                Check the date
+              </Button>
+            )}
+          </div>
+        )}
+        {check && checking && <DateCheck view={view} kind={check} className="mt-2 rounded-2xl bg-surface-2 p-3" />}
       </Card>
     </li>
   );
@@ -319,7 +369,7 @@ function CheckThese({ views, onOpen }: { views: ItemView[]; onOpen: Open }) {
       <p className="-mt-1 mb-3 text-sm text-ink-2">
         {anyBestBefore
           ? "Past their date. Best-before food is usually still safe: if it looks, smells and tastes fine, keep it and tell us. Use-by food should go."
-          : "Past their use-by date, so they're best binned."}
+          : "Past their date, so they're best binned, unless the pack says otherwise."}
       </p>
       <Card className="@container">
         <ul className="divide-y divide-line">
@@ -334,46 +384,50 @@ function CheckThese({ views, onOpen }: { views: ItemView[]; onOpen: Open }) {
 
 function CheckRow({ view, onOpen }: { view: ItemView; onOpen: Open }) {
   const { item, expiry } = view;
-  const bestBefore = item.dateKind === "best-before";
+  const check = needsDateCheck(view);
+  const [checking, setChecking] = useState(false);
   return (
-    <li className="flex items-start gap-3 px-4 py-3">
-      <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-spoiled-soft text-2xl">
-        {item.emoji}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2 @md:flex-row @md:items-center @md:justify-between">
-        <button
-          type="button"
-          data-row-focus={item.id}
-          onClick={() => onOpen(item.id)}
-          className="min-w-0 rounded-lg text-left"
-        >
-          <span className="block truncate font-semibold text-ink">{item.name}</span>
-          <span className="block text-sm text-spoiled">{capitalise(describeDaysLeft(expiry, item.dateKind))}</span>
-        </button>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-10"
-            onClick={(e) => {
-              keepFocusNear(e.currentTarget, todayHeading);
-              markBinned(item.id);
-            }}
+    <li className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-spoiled-soft text-2xl">
+          {item.emoji}
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-2 @md:flex-row @md:items-center @md:justify-between">
+          <button
+            type="button"
+            data-row-focus={item.id}
+            onClick={() => onOpen(item.id)}
+            className="min-w-0 rounded-lg text-left"
           >
-            Binned it
-          </Button>
-          {bestBefore ? (
-            <Button size="sm" variant="ghost" className="h-10" onClick={() => onOpen(item.id, "still-good")}>
-              Still good
+            <span className="block truncate font-semibold text-ink">{item.name}</span>
+            <span className="block text-sm text-spoiled">{capitalise(describeDaysLeft(expiry, item.dateKind))}</span>
+          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-10"
+              onClick={(e) => {
+                keepFocusNear(e.currentTarget, todayHeading);
+                markBinned(item.id);
+              }}
+            >
+              Bin it
             </Button>
-          ) : (
-            <OverflowMenu
-              label={`More for ${item.name}`}
-              actions={[{ label: "Edit date", Icon: PencilLine, onSelect: () => onOpen(item.id, "edit-date") }]}
-            />
-          )}
+            {check ? (
+              <Button size="sm" variant="ghost" className="h-10" aria-expanded={checking} onClick={() => setChecking((c) => !c)}>
+                {check === "still-good" ? "Still good" : "Still in date"}
+              </Button>
+            ) : (
+              <OverflowMenu
+                label={`More for ${item.name}`}
+                actions={[{ label: "Edit date", Icon: PencilLine, onSelect: () => onOpen(item.id, "edit-date") }]}
+              />
+            )}
+          </div>
         </div>
       </div>
+      {check && checking && <DateCheck view={view} kind={check} className="mt-3 rounded-2xl bg-surface-2 p-3" />}
     </li>
   );
 }
@@ -389,7 +443,7 @@ function Summary({ views }: { views: ItemView[] }) {
 
   const cells = [
     ...locations.map((l) => ({ key: l.id, href: `/pantry?loc=${l.id}`, n: counts.get(l.id) ?? 0, label: `in the ${l.name.toLowerCase()}`, short: l.name })),
-    { key: "week", href: "/pantry", n: thisWeek, label: "to use this week", short: "This week" },
+    { key: "week", href: "/pantry?due=week", n: thisWeek, label: "to eat in the next 7 days", short: "Due this week" },
   ];
 
   return (
@@ -405,10 +459,8 @@ function Summary({ views }: { views: ItemView[] }) {
                 href={c.href}
                 className="flex h-full flex-col items-center justify-center gap-0.5 px-2 py-4 text-center hover:bg-surface-2/60 focus-visible:outline-offset-[-3px]"
               >
-                <span className={cx("font-display text-2xl tabular-nums", c.key === "week" && c.n > 0 ? "text-soon" : "text-ink")}>
-                  {c.n}
-                </span>
-                <span className="text-[13px] text-ink-2">
+                <span className="font-sans text-2xl font-semibold tabular-nums text-ink">{c.n}</span>
+                <span className="text-[13px] leading-tight text-ink-2">
                   <span className="sr-only">{c.n} </span>
                   <span aria-hidden>{c.short}</span>
                   <span className="sr-only"> {c.label}</span>
@@ -422,44 +474,31 @@ function Summary({ views }: { views: ItemView[] }) {
   );
 }
 
-function MonthInsight() {
+/** A labelled way in to Insights and Nutrition ("Your kitchen"), with this month's numbers. */
+function KitchenCard() {
   const events = useLarder((s) => s.events);
-  const all = useMemo(() => wasteTotals(events), [events]);
   const month = useMemo(() => wasteTotals(events, startOfMonth()), [events]);
-  if (all.used + all.binned === 0) return null;
-
   const total = month.used + month.binned;
   return (
-    <section aria-labelledby="this-month">
-      <SectionTitle
-        action={
-          <Link href="/insights" className="rounded-lg text-sm font-semibold text-primary hover:underline">
-            See insights
-          </Link>
-        }
-      >
-        <span id="this-month">This month</span>
+    <section aria-labelledby="your-kitchen">
+      <SectionTitle>
+        <span id="your-kitchen">Your kitchen</span>
       </SectionTitle>
-      <Card className="p-4">
-        {total === 0 ? (
-          <p className="text-[15px] text-ink-2">Nothing used up or binned yet this month.</p>
-        ) : (
-          <>
-            <p className="text-[15px] text-ink">
-              <strong className="font-semibold">{month.used} used</strong>, {month.binned} binned
-              {month.binnedPriced && month.binnedValue > 0 && (
-                <span className="text-ink-2"> · about {formatAUD(month.binnedValue)} wasted</span>
-              )}
-            </p>
-            <WasteSplitBar used={month.used} binned={month.binned} className="mt-3" />
-            <p className="mt-2 text-sm text-ink-2">
-              {month.binned === 0
-                ? "Nothing wasted so far. Lovely."
-                : `${Math.round((month.used / total) * 100)}% of what left the larder got eaten.`}
-            </p>
-          </>
-        )}
-      </Card>
+      <Link href="/kitchen" className="flex min-h-14 items-center gap-3 rounded-[var(--radius-card)] border border-line bg-surface p-4 hover:bg-surface-2">
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold text-ink">
+            {total === 0 ? "Insights and nutrition" : `This month: ${month.used} used, ${month.binned} binned`}
+          </span>
+          <span className="block text-sm text-ink-2">
+            {total === 0
+              ? "See what gets eaten, what gets binned, and what you've had."
+              : month.binned === 0
+                ? "Nothing wasted so far. Lovely. See insights and nutrition."
+                : `${Math.round((month.used / total) * 100)}% eaten. See what gets binned, and nutrition.`}
+          </span>
+        </span>
+        <ChevronRight size={20} aria-hidden className="shrink-0 text-ink-3" />
+      </Link>
     </section>
   );
 }

@@ -22,6 +22,7 @@ export function ItemRow({
   onOpen,
   focusFallback,
   selection,
+  className,
 }: {
   view: ItemView;
   showLocation?: boolean;
@@ -30,6 +31,7 @@ export function ItemRow({
   focusFallback?: () => HTMLElement | null;
   /** Multi-select (Larder): long-press or "Select" starts it; then taps toggle the row. */
   selection?: { active: boolean; selected: boolean; toggle: (id: string) => void; start: (id: string) => void };
+  className?: string;
 }) {
   const { item, location, expiry } = view;
   const meta = STATUS_META[expiry.status];
@@ -66,6 +68,7 @@ export function ItemRow({
       className={cx(
         "flex flex-wrap items-center justify-end gap-x-1 rounded-2xl pr-1 transition-colors hover:bg-surface-2/60",
         selection?.selected && "bg-primary-soft hover:bg-primary-soft",
+        className,
       )}
     >
       <button
