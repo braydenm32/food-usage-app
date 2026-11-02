@@ -38,9 +38,14 @@ const COPY = {
     reading: "Reading your list…",
     readingSub: "Working out each item. This takes a few seconds.",
   },
+  shelf: {
+    tips: ["Open the door wide and step back", "Good light helps, so turn the fridge light on", "One shelf or door at a time works best"],
+    reading: "Looking at your shelf…",
+    readingSub: "Spotting each food. This takes about 10 seconds.",
+  },
 } as const;
 
-export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list"; onResult: (r: ParseResponse) => void }) {
+export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list" | "shelf"; onResult: (r: ParseResponse) => void }) {
   const isTouch = useIsTouch();
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -215,7 +220,7 @@ export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list"; onR
           <span aria-hidden className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-soft text-primary">
             <ImageUp size={26} />
           </span>
-          <span className="font-display text-xl text-ink">Choose a photo of your {kind}</span>
+          <span className="font-display text-xl text-ink">Choose a photo of your {kind === "shelf" ? "fridge or shelf" : kind}</span>
           <span className="text-[15px] text-ink-2">or drop it here. JPEG, PNG or HEIC.</span>
         </button>
       )}

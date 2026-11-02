@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { ArrowLeft, Lightbulb } from "lucide-react";
+import { ArrowLeft, ChevronRight, Lightbulb } from "lucide-react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { getFoodType } from "@/lib/shelf-life/foods";
@@ -79,6 +79,13 @@ export default function InsightsPage() {
     <>
       <PageHeader title="Insights" subtitle="What got eaten, and what got binned" actions={back} showSettings />
       <div className="px-5 lg:px-0">
+        <Link href="/nutrition" className="mb-4 flex min-h-14 items-center justify-between gap-3 rounded-[var(--radius-card)] border border-line bg-surface px-4 py-3 hover:bg-surface-2">
+          <span>
+            <span className="block font-semibold text-ink">Nutrition</span>
+            <span className="block text-sm text-ink-2">Calories, protein, fibre and vitamins from meals you cook</span>
+          </span>
+          <ChevronRight size={20} className="shrink-0 text-ink-3" aria-hidden />
+        </Link>
         {empty ? (
           <Card>
             <EmptyState

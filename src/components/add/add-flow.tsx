@@ -7,7 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardPaste,
-  NotebookPen,
+  NotebookPen, Refrigerator,
   Receipt,
   ScanBarcode,
   Search,
@@ -41,6 +41,13 @@ const META: Record<AddMethod, { title: string; blurb: string; Icon: LucideIcon; 
     Icon: NotebookPen,
     pageTitle: "Snap a list",
     pageSub: "A photo of your shopping list, ticked off or not.",
+  },
+  shelf: {
+    title: "Snap your fridge or cupboard",
+    blurb: "One photo of a shelf adds everything on it. Great for setting up.",
+    Icon: Refrigerator,
+    pageTitle: "Snap a shelf",
+    pageSub: "A photo of your fridge, freezer or cupboard. We'll list what we can see.",
   },
   paste: {
     title: "Paste a list or order email",
@@ -93,6 +100,7 @@ export function AddSkeleton() {
 const PENDING_LABEL: Record<AddMethod, string> = {
   receipt: "from a receipt",
   list: "from a list photo",
+  shelf: "from a shelf photo",
   paste: "from a pasted list",
   barcode: "from barcode scans",
   manual: "added by hand",
@@ -106,7 +114,7 @@ function Hub() {
   // Without AI, photo reading can't work, so the paste flow leads and the photo options say they need setup.
   const hero: AddMethod = ai === false ? "paste" : "receipt";
   const secondary: AddMethod[] =
-    ai === false ? ["barcode", "manual", "receipt", "list"] : ["paste", "list", "barcode", "manual"];
+    ai === false ? ["barcode", "manual", "receipt", "list", "shelf"] : ["paste", "list", "shelf", "barcode", "manual"];
   const { Icon: HeroIcon } = META[hero];
 
   return (
@@ -118,7 +126,7 @@ function Hub() {
             {pending.map((p) => (
               <Link
                 key={p.method}
-                href={`/add?method=${p.method}${["receipt", "list", "paste"].includes(p.method) ? "&step=review" : ""}`}
+                href={`/add?method=${p.method}${["receipt", "list", "shelf", "paste"].includes(p.method) ? "&step=review" : ""}`}
                 className="flex min-h-14 items-center gap-3 rounded-2xl bg-soon-soft px-4 py-3 text-[15px] text-ink"
               >
                 <span className="flex-1">
@@ -199,7 +207,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   const [submitting, setSubmitting] = useState(false);
   const meta = META[method];
   const drafts = session.drafts;
-  const inReview = review && drafts.length > 0 && (method === "receipt" || method === "list" || method === "paste");
+  const inReview = review && drafts.length > 0 && (method === "receipt" || method === "list" || method === "shelf" || method === "paste");
 
   const onParsed = useCallback(
     (r: ParseResponse) => {
@@ -265,7 +273,8 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   function submit(fresh: ReviewDraft[], merges: MergePlan[]) {
     if (fresh.length + merges.length === 0) return;
     setSubmitting(true);
-    const created = addItems(fresh, session.source, merges.length ? { merge: merges } : undefined);
+    const removeListIds = session.removeListIds?.length ? session.removeListIds : undefined;
+    const created = addItems(fresh, session.source, merges.length || removeListIds ? { merge: merges.length ? merges : undefined, removeListIds } : undefined);
     const n = created.length;
     const m = merges.length;
     const message =
@@ -285,7 +294,9 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   }
 
   const backHref = inReview ? `/add?method=${method}` : "/add";
-  const reviewTitle = method === "receipt" ? "Check your receipt" : method === "list" ? "Check your list" : "Check these items";
+  const reviewTitle = method === "shelf" ? "Check what we spotted" : session.removeListIds?.length
+    ? "Put away your shopping"
+    : method === "receipt" ? "Check your receipt" : method === "list" ? "Check your list" : "Check these items";
   const foodCount = drafts.filter((d) => d.isFood).length;
   const showPrices =
     session.source === "receipt" || session.source === "order" || drafts.some((d) => d.price !== undefined);
@@ -325,7 +336,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
       ) : (
         <div className="flex flex-col gap-8">
           <div className="px-5 lg:px-0">
-            {drafts.length > 0 && (method === "receipt" || method === "list" || method === "paste") && (
+            {drafts.length > 0 && (method === "receipt" || method === "list" || method === "shelf" || method === "paste") && (
               <Link
                 href={`/add?method=${method}&step=review`}
                 className="mb-5 flex min-h-14 items-center gap-3 rounded-2xl bg-soon-soft px-4 py-3 text-[15px] text-ink"
@@ -341,6 +352,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
             )}
             {method === "receipt" && <PhotoCapture kind="receipt" onResult={onParsed} />}
             {method === "list" && <PhotoCapture kind="list" onResult={onParsed} />}
+            {method === "shelf" && <PhotoCapture kind="shelf" onResult={onParsed} />}
             {method === "paste" && <PasteInput onResult={onParsed} />}
             {method === "barcode" && (
               <>

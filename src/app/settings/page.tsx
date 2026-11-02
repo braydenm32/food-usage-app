@@ -1,5 +1,6 @@
 "use client";
 
+import { useMealLog } from "@/lib/nutrition/meal-log";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Bell, CalendarDays, ChartColumn, ChevronRight, Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
@@ -705,7 +706,7 @@ export default function SettingsPage() {
             <Row>
               {!confirmErase ? (
                 <div className="flex items-center justify-between gap-4">
-                  <RowLabel label="Erase everything" description="Food, history, list, recipes and settings. Can't be undone." />
+                  <RowLabel label="Erase everything" description="Food, history, list, recipes, meal log and settings. Can't be undone." />
                   <Button
                     variant="secondary"
                     size="sm"
@@ -737,6 +738,7 @@ export default function SettingsPage() {
                         // Erasing this device must not erase the household's copy.
                         getSyncEngine()?.unbind();
                         resetAll();
+                        useMealLog.getState().clear();
                         setConfirmErase(false);
                         toast("Everything's been erased");
                       }}

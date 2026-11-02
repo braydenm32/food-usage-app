@@ -194,7 +194,7 @@ function parseProfile(d: Obj): HouseholdProfile {
 function parseIngredient(v: unknown): RecipeIngredient | null {
   if (!isObj(v) || !isStr(v.name)) return null;
   return {
-    ...pick(v, { quantity: isNum, unit: isStr, foodTypeId: (x) => x === null || isStr(x), optional: (x) => typeof x === "boolean" }),
+    ...pick(v, { quantity: isNum, quantityMax: isNum, unit: isStr, note: isStr, foodTypeId: (x) => x === null || isStr(x), optional: (x) => typeof x === "boolean" }),
     name: v.name,
   };
 }
@@ -203,7 +203,7 @@ function parseRecipe(id: string, d: Obj): Recipe | null {
   if (!isStr(d.title) || !isRecipeSource(d.source) || !isNum(d.servings)) return null;
   if (!Array.isArray(d.ingredients) || !Array.isArray(d.steps)) return null;
   return {
-    ...pick(d, { sourceUrl: isWebUrl, image: isWebUrl, minutes: isNum, summary: isStr, savedAt: isDate }),
+    ...pick(d, { sourceUrl: isWebUrl, image: isWebUrl, minutes: isNum, summary: isStr, savedAt: isDate, tbspMl: (x) => x === 15 || x === 20 }),
     id,
     title: d.title,
     source: d.source,

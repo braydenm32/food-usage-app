@@ -11,6 +11,10 @@ import { FOOD_TYPES, getFoodType, matchFoodType, searchFoodTypes } from "@/lib/s
 import type { Aisle, DraftItem, FoodType, ShoppingListItem, Unit } from "@/lib/types";
 import { Button, Card, EmptyState, IconButton, Input, PageHeader, SectionTitle, Sheet, Stepper, cx } from "@/components/ui";
 import { toast } from "@/components/toast";
+import { useRouter } from "next/navigation";
+import { startReviewSession } from "@/components/add/session";
+import { formatQuantity } from "@/components/pantry/format";
+import { lineToDraft } from "@/lib/drafts";
 
 /** Walking order through a typical Australian supermarket. */
 const AISLE_ORDER: Aisle[] = [
@@ -90,18 +94,43 @@ export default function ListPage() {
 
   const [editing, setEditing] = useState<ShoppingListItem | null>(null);
   const openedAt = useNow();
+  const router = useRouter();
 
   const open = useMemo(() => list.filter((l) => !l.checked), [list]);
   const ticked = useMemo(() => list.filter((l) => l.checked), [list]);
   const groups = useMemo(() => groupByAisle(open), [open]);
+  const locations = useLarder((s) => s.locations);
+  /** Larder stock per food type (and per name for unmatched items), for the "Already have" hint. */
+  const haveFor = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const i of items) {
+      const key = i.foodTypeId ?? i.name.toLowerCase();
+      if (m.has(key) || (i.initialQuantity && i.quantity / i.initialQuantity <= 0.25)) continue;
+      const where = locations.find((l) => l.id === i.locationId)?.name.toLowerCase();
+      m.set(key, `${formatQuantity(i.quantity, i.unit)}${where ? ` in the ${where}` : ""}`);
+    }
+    return (l: ShoppingListItem) => m.get(l.foodTypeId ?? l.name.toLowerCase());
+  }, [items, locations]);
 
   /* Suggestions: things we ran out of recently, then staples not in the larder. */
   const suggestions = useMemo(() => {
     const inLarder = new Set(items.map((i) => i.foodTypeId).filter(Boolean));
     const onList = new Set(open.map((l) => l.foodTypeId).filter(Boolean));
     const onListNames = new Set(open.map((l) => l.name.toLowerCase()));
-    const out: Array<{ key: string; name: string; food?: FoodType; why: "ran-out" | "staple" }> = [];
+    const out: Array<{ key: string; name: string; food?: FoodType; why: "ran-out" | "low" | "often" | "staple" }> = [];
     const seen = new Set<string>();
+
+    // Running low: a quarter or less left of something we don't have a fuller one of.
+    for (const i of items) {
+      if (!i.initialQuantity || i.quantity / i.initialQuantity > 0.25) continue;
+      const key = i.foodTypeId ?? i.name.toLowerCase();
+      if (seen.has(key) || (i.foodTypeId ? onList.has(i.foodTypeId) : onListNames.has(key))) continue;
+      const fuller = items.some((o) => o.id !== i.id && (i.foodTypeId ? o.foodTypeId === i.foodTypeId : o.name.toLowerCase() === key) && o.quantity / (o.initialQuantity || 1) > 0.25);
+      if (fuller) continue;
+      seen.add(key);
+      const food = getFoodType(i.foodTypeId);
+      out.push({ key, name: food?.name ?? i.name, food, why: "low" });
+    }
 
     const cutoff = openedAt - 21 * 86_400_000;
     const used = events
@@ -115,6 +144,19 @@ export default function ListPage() {
       if (!e.foodTypeId && items.some((i) => i.name.toLowerCase() === key)) continue;
       const food = getFoodType(e.foodTypeId);
       out.push({ key, name: food?.name ?? e.itemName, food, why: "ran-out" });
+    }
+    // Often bought: added three or more times in the last two months, and none in the larder now.
+    const since = openedAt - 60 * 86_400_000;
+    const adds = new Map<string, number>();
+    for (const e of events) {
+      if (e.type === "added" && e.foodTypeId && new Date(e.at).getTime() > since) adds.set(e.foodTypeId, (adds.get(e.foodTypeId) ?? 0) + 1);
+    }
+    for (const [id, n] of [...adds].sort((a, b) => b[1] - a[1])) {
+      if (n < 3 || seen.has(id) || inLarder.has(id) || onList.has(id)) continue;
+      const food = getFoodType(id);
+      if (!food) continue;
+      seen.add(id);
+      out.push({ key: id, name: food.name, food, why: "often" });
     }
     for (const f of FOOD_TYPES) {
       if (!f.staple || seen.has(f.id) || inLarder.has(f.id) || onList.has(f.id)) continue;
@@ -151,9 +193,8 @@ export default function ListPage() {
     toast(`Added ${name}`);
   };
 
-  const putInLarder = () => {
-    if (ticked.length === 0) return;
-    const drafts: DraftItem[] = ticked.map((l) => {
+  const tickedDrafts = (): DraftItem[] =>
+    ticked.map((l) => {
       const match = l.foodTypeId ? undefined : matchFoodType(l.name);
       const food = getFoodType(l.foodTypeId) ?? (match?.confidence === "high" ? match.food : undefined);
       const unknown = defaultsForUnknown(l.name);
@@ -170,6 +211,23 @@ export default function ListPage() {
         include: true,
       };
     });
+
+  /** Review the ticked items first, so printed dates can be typed in before they're put away. */
+  const reviewPutAway = () => {
+    if (ticked.length === 0) return;
+    const drafts = tickedDrafts().map((d) => ({ ...lineToDraft({ name: d.name }), ...d, isFood: true }));
+    startReviewSession("list", {
+      drafts,
+      source: "list",
+      removeListIds: ticked.map((l) => l.id),
+      note: "Type any printed dates you can see on the packs. Anything left blank gets an estimate.",
+    });
+    router.push("/add?method=list&step=review");
+  };
+
+  const putInLarder = () => {
+    if (ticked.length === 0) return;
+    const drafts = tickedDrafts();
     // One undoable step: the items go in and the ticked rows come off the list.
     const created = addItems(drafts, "list", { removeListIds: ticked.map((l) => l.id) });
     toast(`Put ${created.length} item${created.length === 1 ? "" : "s"} in the larder`, { undoable: true });
@@ -261,6 +319,7 @@ export default function ListPage() {
                     <ListRow
                       key={it.id}
                       item={it}
+                      have={haveFor(it)}
                       onToggle={() => toggleListItem(it.id)}
                       onEdit={() => setEditing(it)}
                       onRemove={() => {
@@ -296,6 +355,7 @@ export default function ListPage() {
                     <ListRow
                       key={it.id}
                       item={it}
+                      have={haveFor(it)}
                       onToggle={() => toggleListItem(it.id)}
                       onEdit={() => setEditing(it)}
                       onRemove={() => {
@@ -306,11 +366,14 @@ export default function ListPage() {
                   ))}
                 </Card>
                 <div className="mt-4">
-                  <Button block size="lg" onClick={putInLarder}>
+                  <Button block size="lg" onClick={reviewPutAway}>
                     Put {ticked.length} item{ticked.length === 1 ? "" : "s"} in the larder
                   </Button>
                   <p className="mt-2 text-center text-xs text-ink-3">
-                    Each goes to its usual spot with an estimated date. You can adjust them in the larder.
+                    You can type printed dates on the next screen.{" "}
+                    <button type="button" onClick={putInLarder} className="inline-flex min-h-11 items-center font-medium text-primary underline-offset-2 hover:underline">
+                      Skip and use estimates
+                    </button>
                   </p>
                 </div>
               </section>
@@ -339,7 +402,7 @@ export default function ListPage() {
                   <Plus size={15} aria-hidden className="text-primary" />
                   {s.food?.emoji && <span aria-hidden>{s.food.emoji}</span>}
                   {s.name}
-                  {s.why === "ran-out" && <span className="text-xs text-ink-3">ran out</span>}
+                  {s.why !== "staple" && <span className="text-xs text-ink-3">{s.why === "ran-out" ? "ran out" : s.why === "low" ? "running low" : "often bought"}</span>}
                 </button>
               ))}
             </div>
@@ -371,11 +434,14 @@ export default function ListPage() {
 
 function ListRow({
   item,
+  have,
   onToggle,
   onEdit,
   onRemove,
 }: {
   item: ShoppingListItem;
+  /** What's already in the larder, e.g. "1 L in the fridge", so you don't double up. */
+  have?: string;
   onToggle: () => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -413,7 +479,11 @@ function ListRow({
           >
             {item.name}
           </span>
-          {why && <span className="block truncate text-xs text-ink-3">{why}</span>}
+          {have && !item.checked ? (
+            <span className="block truncate text-xs font-medium text-soon">Already have {have}</span>
+          ) : (
+            why && <span className="block truncate text-xs text-ink-3">{why}</span>
+          )}
         </span>
       </button>
       <button

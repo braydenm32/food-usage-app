@@ -5,7 +5,7 @@ import { AlertCircle, Sparkles } from "lucide-react";
 import { buttonClass, cx } from "@/components/ui";
 
 /** Shown when a photo can't be read because AI isn't configured on the server. */
-export function AiUnavailable({ what }: { what: "receipt" | "list" }) {
+export function AiUnavailable({ what }: { what: "receipt" | "list" | "shelf" }) {
   return (
     <div role="status" className="rounded-[var(--radius-card)] border border-line bg-surface p-5">
       <div className="flex items-start gap-3">
@@ -15,7 +15,7 @@ export function AiUnavailable({ what }: { what: "receipt" | "list" }) {
         <div>
           <p className="font-semibold text-ink">Photo reading isn’t switched on here yet</p>
           <p className="mt-1 text-[15px] text-ink-2">
-            Reading {what === "receipt" ? "receipts" : "photos of lists"} needs an AI key on the server. You can still get
+            Reading {what === "receipt" ? "receipts" : what === "shelf" ? "photos of your shelves" : "photos of lists"} needs an AI key on the server. You can still get
             everything in quickly another way.
           </p>
         </div>

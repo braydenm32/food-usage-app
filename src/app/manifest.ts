@@ -16,6 +16,8 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
       { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
     ],
+    // "Share to Larder" from a browser or social app opens the recipe importer with the link.
+    share_target: { action: "/recipes", method: "GET", params: { title: "title", text: "text", url: "url" } },
     shortcuts: [
       { name: "Scan a receipt", url: "/add?method=receipt" },
       { name: "Shopping list", url: "/list" },

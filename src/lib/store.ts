@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { addAmounts } from "@/lib/recipes/quantity";
 import type {
   Aisle,
   DraftItem,
@@ -182,7 +183,8 @@ export interface LarderState {
   ) => PantryItem[];
   updateItem: (id: string, patch: Partial<PantryItem>) => void;
   openItem: (id: string) => void;
-  moveItem: (id: string, locationId: string) => void;
+  /** Move an item. With `quantity` less than what's there, only that much moves, as a new item. */
+  moveItem: (id: string, locationId: string, quantity?: number) => void;
   /** Mark some or all of an item used or binned. Removes it when nothing is left. */
   consumeItem: (id: string, quantity: number | "all", how: "used" | "binned") => void;
   /** Use or bin several whole items as one undoable step. */
@@ -204,6 +206,8 @@ export interface LarderState {
 
   saveRecipe: (r: Recipe) => void;
   unsaveRecipe: (id: string) => void;
+  /** Edit a saved recipe in place (title, servings, ingredients, steps…). */
+  updateSavedRecipe: (id: string, patch: Partial<Recipe>) => void;
 
   addToList: (entries: Array<Omit<ShoppingListItem, "id" | "checked" | "addedAt" | "aisle"> & { aisle?: Aisle }>) => void;
   toggleListItem: (id: string) => void;
@@ -448,7 +452,7 @@ export const useLarder = create<LarderState>()(
           }));
         },
 
-        moveItem: (id, locationId) => {
+        moveItem: (id, locationId, quantity) => {
           const state = get();
           const item = state.items.find((i) => i.id === id);
           if (!item || item.locationId === locationId) return;
@@ -463,11 +467,40 @@ export const useLarder = create<LarderState>()(
             patch.thawedAt = nowISO();
           }
           // Freezer to freezer keeps the frozen date.
-          act(`Moved ${item.name} to ${to?.name ?? "new spot"}`, (s) => ({
-            items: s.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
+          const splitting = quantity !== undefined && quantity > 0 && quantity < item.quantity;
+          if (!splitting) {
+            act(`Moved ${item.name} to ${to?.name ?? "new spot"}`, (s) => ({
+              items: s.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
+              events: [
+                ...s.events,
+                makeEvent(item, "moved", { detail: `${from?.name ?? "?"} → ${to?.name ?? "?"}`, locationId }),
+              ],
+            }));
+            return;
+          }
+          // Split: the moved part becomes its own item and keeps the original dates; price is shared out.
+          const movedValue = valueOf(item, quantity);
+          const moved: PantryItem = {
+            ...item,
+            ...patch,
+            id: uid(),
+            quantity,
+            initialQuantity: quantity,
+            price: movedValue,
+          };
+          if (moved.price === undefined) delete moved.price;
+          const rest: PantryItem = {
+            ...item,
+            quantity: Math.round((item.quantity - quantity) * 1000) / 1000,
+            initialQuantity: Math.max(item.quantity - quantity, Math.round((item.initialQuantity - quantity) * 1000) / 1000),
+            price: item.price !== undefined && movedValue !== undefined ? Math.round((item.price - movedValue) * 100) / 100 : item.price,
+          };
+          if (rest.price === undefined) delete rest.price;
+          act(`Moved ${quantity} ${item.name} to ${to?.name ?? "new spot"}`, (s) => ({
+            items: [...s.items.map((i) => (i.id === id ? rest : i)), moved],
             events: [
               ...s.events,
-              makeEvent(item, "moved", { detail: `${from?.name ?? "?"} → ${to?.name ?? "?"}`, locationId }),
+              makeEvent(moved, "moved", { detail: `${quantity} of ${item.quantity}: ${from?.name ?? "?"} → ${to?.name ?? "?"}`, locationId, quantity, unit: item.unit }),
             ],
           }));
         },
@@ -592,6 +625,8 @@ export const useLarder = create<LarderState>()(
               : { savedRecipes: [{ ...r, savedAt: nowISO() }, ...s.savedRecipes] },
           ),
         unsaveRecipe: (id) => set((s) => ({ savedRecipes: s.savedRecipes.filter((r) => r.id !== id) })),
+        updateSavedRecipe: (id, patch) =>
+          set((s) => ({ savedRecipes: s.savedRecipes.map((r) => (r.id === id ? { ...r, ...patch, id: r.id, savedAt: r.savedAt } : r)) })),
 
         addToList: (entries) =>
           set((s) => {
@@ -602,7 +637,17 @@ export const useLarder = create<LarderState>()(
                   !l.checked &&
                   ((e.foodTypeId && l.foodTypeId === e.foodTypeId) || l.name.toLowerCase() === e.name.toLowerCase()),
               );
-              if (existing) continue;
+              if (existing) {
+                // The same recipe asking again (a second tap on "Add to list") shouldn't double it.
+                if (e.recipeId && existing.recipeId === e.recipeId) continue;
+                // Same thing again: add the amounts together when the units allow (1 egg + 2 eggs = 3).
+                const sum = addAmounts(existing, e);
+                if (sum) {
+                  const i = list.indexOf(existing);
+                  list[i] = { ...existing, ...sum };
+                }
+                continue;
+              }
               const food = e.foodTypeId ? getFoodType(e.foodTypeId) : undefined;
               list.push({
                 ...e,

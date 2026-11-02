@@ -318,7 +318,7 @@ function CheckThese({ views, onOpen }: { views: ItemView[]; onOpen: Open }) {
       </SectionTitle>
       <p className="-mt-1 mb-3 text-sm text-ink-2">
         {anyBestBefore
-          ? "Past their date. Bin them, or tell us if they're still fine."
+          ? "Past their date. Best-before food is usually still safe: if it looks, smells and tastes fine, keep it and tell us. Use-by food should go."
           : "Past their use-by date, so they're best binned."}
       </p>
       <Card className="@container">

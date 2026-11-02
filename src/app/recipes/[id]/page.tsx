@@ -3,21 +3,25 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, ExternalLink, ShoppingBasket, Users, ChefHat } from "lucide-react";
+import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, ExternalLink, Pencil, Timer, ShoppingBasket, Users, ChefHat, Trash2 } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, SectionTitle, Sheet, Stepper, buttonClass, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
 import { toast } from "@/components/toast";
 import { CookSheet } from "@/components/recipes/cook-sheet";
+import { CookMode } from "@/components/recipes/cook-mode";
+import { EditRecipeSheet } from "@/components/recipes/edit-recipe-sheet";
+import { RecipeNutritionCard } from "@/components/nutrition/recipe-nutrition";
+import { useCookTimers } from "@/lib/cook-timers";
 import { getBuiltinRecipe } from "@/lib/recipes/builtin";
 import { readCachedRecipe, cacheRecipes } from "@/lib/recipes/cache";
-import { formatAmount, scaleIngredient } from "@/lib/recipes/quantity";
-import { allergenHits, analyseRecipe, dislikeHits, exclusionReason, isStaple } from "@/lib/recipes/suggest";
+import { convertToItemUnit, formatAmount, scaleIngredient, tbspOf } from "@/lib/recipes/quantity";
+import { allergenHits, analyseRecipe, dislikeHits, exclusionReason, isStaple, stockCount } from "@/lib/recipes/suggest";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { toLocalISODate } from "@/lib/shelf-life/engine";
 import { useItemViews } from "@/lib/selectors";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
-import type { Recipe } from "@/lib/types";
+import type { PantryItem, Recipe } from "@/lib/types";
 
 export default function RecipeDetailPage() {
   return (
@@ -95,12 +99,26 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const profile = useLarder((s) => s.profile);
   const defaultPeople = profile.people;
   const router = useRouter();
-  const planParam = useSearchParams().get("plan");
+  const search = useSearchParams();
+  const planParam = search.get("plan");
+  const cookParam = search.get("cook") === "1";
+  const timerCount = useCookTimers((s) => s.timers.filter((t) => t.recipeId === recipe.id).length);
+  const [editOpen, setEditOpen] = useState(false);
 
   const isSaved = savedRecipes.some((r) => r.id === recipe.id);
   // Scale to the household by default; the recipe's own serving count is shown beside it.
   const [servings, setServings] = useState(() => Math.max(1, defaultPeople));
   const [cookOpen, setCookOpen] = useState(false);
+  // Cook mode is in the URL (?cook=1) so a timer notification or the timer pill can reopen it.
+  const cookModeOpen = cookParam && recipe.steps.length > 0;
+  const setCookModeOpen = (on: boolean) => {
+    const params = new URLSearchParams(search.toString());
+    if (on) params.set("cook", "1");
+    else params.delete("cook");
+    const q = params.toString();
+    router.replace(`/recipes/${encodeURIComponent(recipe.id)}${q ? `?${q}` : ""}`, { scroll: false });
+  };
+  const editable = isSavedRecipe(recipe, savedRecipes);
   const planPrefill = planParam && /^\d{4}-\d{2}-\d{2}$/.test(planParam) ? planParam : null;
   const [planOpen, setPlanOpen] = useState(false);
   const [planDate, setPlanDate] = useState(() => planPrefill ?? toLocalISODate(new Date()));
@@ -113,6 +131,20 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const analysis = useMemo(() => analyseRecipe(recipe, views), [recipe, views]);
   const useByIngredient = new Map(analysis.uses.map((u) => [u.ingredient, u]));
   const missingNames = new Set(analysis.missing.map((m) => m.name));
+  const stock = stockCount(analysis);
+  // Ingredients you have, but not enough of for this many servings (when the units compare).
+  const shortBy = useMemo(() => {
+    const m = new Map<string, { have: number; need: number; unit: PantryItem["unit"]; name: string; foodTypeId: string | null }>();
+    for (const u of analysis.uses) {
+      const ing = recipe.ingredients.find((i) => i.name === u.ingredient);
+      const item = views.find((v) => v.item.id === u.itemId)?.item;
+      if (!ing || !item) continue;
+      const need = convertToItemUnit(scaleIngredient(ing, factor), item, tbspOf(recipe));
+      if (need !== null && need > item.quantity * 1.05) m.set(ing.name, { have: item.quantity, need, unit: item.unit, name: item.name, foodTypeId: item.foodTypeId });
+    }
+    return m;
+  }, [analysis.uses, recipe, views, factor]);
+  const usesTbsp = tbspOf(recipe) === 15 && recipe.ingredients.some((i) => i.unit === "tbsp");
 
   function addMissing() {
     const entries = analysis.missing.map((m) => {
@@ -120,6 +152,10 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
       const name = getFoodType(m.foodTypeId)?.name ?? capitalise(m.name);
       return { name, foodTypeId: m.foodTypeId ?? null, quantity: s.quantity, unit: s.unit, reason: "recipe" as const, recipeId: recipe.id };
     });
+    // Top-ups: only the extra you need to buy.
+    for (const sh of shortBy.values()) {
+      entries.push({ name: sh.name, foodTypeId: sh.foodTypeId, quantity: Math.round((sh.need - sh.have) * 100) / 100, unit: sh.unit, reason: "recipe" as const, recipeId: recipe.id });
+    }
     addToList(entries);
     toast(`Added ${entries.length} ${entries.length === 1 ? "item" : "items"} to your list`);
   }
@@ -168,14 +204,19 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <Users size={16} aria-hidden /> Serves
             <Stepper label="servings" value={servings} min={1} onChange={(v) => setServings(Math.max(1, Math.round(v)))} />
-            <span className="whitespace-nowrap text-sm text-ink-3">Recipe serves {recipe.servings}</span>
-            {servings !== recipe.servings && (
-              <button type="button" className="inline-flex h-11 items-center whitespace-nowrap text-sm font-medium text-primary hover:underline" onClick={() => setServings(recipe.servings)}>
-                Use {recipe.servings}
-              </button>
-            )}
           </div>
         </div>
+        {servings !== recipe.servings && (
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 rounded-2xl bg-surface-2 px-3 text-sm text-ink-2">
+            <span className="py-2">
+              Scaled from {recipe.servings} to {servings}
+              {servings === defaultPeople ? " for your household" : ""}.
+            </span>
+            <button type="button" className="inline-flex min-h-11 items-center whitespace-nowrap font-semibold text-primary hover:underline" onClick={() => setServings(recipe.servings)}>
+              Use the recipe&apos;s {recipe.servings}
+            </button>
+          </p>
+        )}
         {recipe.tags.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Tags">
             {recipe.tags.slice(0, 6).map((t) => (
@@ -186,26 +227,54 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           </ul>
         )}
 
-        <div className="mt-6 flex flex-wrap gap-2">
-          <Button size="lg" onClick={() => setCookOpen(true)} className="w-full sm:w-auto">
+        <div className="mt-6 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          {recipe.steps.length > 0 && (
+            <Button size="lg" onClick={() => setCookModeOpen(true)} className="col-span-2 sm:w-auto">
+              {timerCount > 0 ? <Timer size={20} aria-hidden /> : <CookingPot size={20} aria-hidden />} {timerCount > 0 ? "Back to cooking" : "Start cooking"}
+            </Button>
+          )}
+          <Button size="lg" variant={recipe.steps.length > 0 ? "secondary" : "primary"} onClick={() => setCookOpen(true)} className={recipe.steps.length > 0 ? "" : "col-span-2 sm:w-auto"}>
             <ChefHat size={20} aria-hidden /> I cooked this
           </Button>
           <Button
             variant="secondary"
             size="lg"
-            aria-pressed={isSaved}
+            aria-pressed={recipe.id.startsWith("imp-") ? undefined : isSaved}
             onClick={() => {
               if (isSaved) {
                 unsaveRecipe(recipe.id);
-                toast("Removed from saved recipes");
+                // Imported recipes only exist in your saved list, so removing one deletes it: offer Undo and leave the page.
+                if (recipe.id.startsWith("imp-")) {
+                  router.push("/recipes");
+                  toast(`Deleted ${recipe.title}`, { action: { label: "Undo", onClick: () => saveRecipe(recipe) } });
+                } else {
+                  toast("Removed from saved recipes", { action: { label: "Undo", onClick: () => saveRecipe(recipe) } });
+                }
               } else {
                 saveRecipe(recipe);
                 toast("Saved to your recipes");
               }
             }}
           >
-            {isSaved ? <BookmarkCheck size={20} aria-hidden /> : <Bookmark size={20} aria-hidden />} {isSaved ? "Saved" : "Save"}
+            {isSaved && recipe.id.startsWith("imp-") ? (
+              <>
+                <Trash2 size={18} aria-hidden /> Delete
+              </>
+            ) : isSaved ? (
+              <>
+                <BookmarkCheck size={20} aria-hidden /> Saved
+              </>
+            ) : (
+              <>
+                <Bookmark size={20} aria-hidden /> Save
+              </>
+            )}
           </Button>
+          {editable && (
+            <Button variant="secondary" size="lg" onClick={() => setEditOpen(true)}>
+              <Pencil size={18} aria-hidden /> Edit
+            </Button>
+          )}
           {plannerOn && (
             <Button variant="secondary" size="lg" onClick={() => setPlanOpen(true)}>
               <CalendarPlus size={20} aria-hidden /> Add to plan
@@ -216,9 +285,14 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
 
       <div className="mt-8 grid gap-x-12 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <section aria-labelledby="ingredients-h">
-          <SectionTitle>
+          <SectionTitle action={stock.total > 0 ? <span className="text-sm text-ink-2">You have {stock.have} of {stock.total}</span> : undefined}>
             <span id="ingredients-h">Ingredients</span>
           </SectionTitle>
+          {usesTbsp && (
+            <p className="mb-3 rounded-2xl bg-surface-2 p-3 text-sm text-ink-2">
+              This recipe&apos;s tablespoon is 15 ml, smaller than an Australian 20 ml one. Measure 3 teaspoons for each tablespoon.
+            </p>
+          )}
           <Card>
             <ul className="divide-y divide-line">
               {recipe.ingredients.map((ing, i) => {
@@ -232,9 +306,18 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
                         {ing.name}
                         {ing.optional && <span className="text-ink-3"> (optional)</span>}
                       </p>
-                      {s.quantity !== undefined && <p className="text-sm text-ink-2">{formatAmount(s.quantity, s.unit)}</p>}
+                      {(s.quantity !== undefined || ing.note) && (
+                        <p className="text-sm text-ink-2">
+                          {formatAmount(s.quantity, s.unit, s.quantityMax)}
+                          {ing.note && <span className="text-ink-3">{s.quantity !== undefined ? " · " : ""}{ing.note}</span>}
+                        </p>
+                      )}
                     </div>
-                    {use ? (
+                    {use && shortBy.has(ing.name) ? (
+                      <span className="shrink-0 rounded-full bg-soon-soft px-2 py-0.5 text-right text-xs font-semibold text-ink">
+                        Have {formatAmount(shortBy.get(ing.name)!.have, shortBy.get(ing.name)!.unit)}, need {formatAmount(shortBy.get(ing.name)!.need, shortBy.get(ing.name)!.unit)}
+                      </span>
+                    ) : use ? (
                       <StatusPill status={use.status}>In larder{use.status !== "fresh" ? ` · ${STATUS_META[use.status].label.toLowerCase()}` : ""}</StatusPill>
                     ) : missing ? (
                       <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-semibold text-ink-2">Missing</span>
@@ -246,13 +329,19 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
               })}
             </ul>
           </Card>
-          {analysis.missing.length > 0 ? (
+          {analysis.missing.length + shortBy.size > 0 ? (
             <Button variant="secondary" block className="mt-3" onClick={addMissing}>
-              <ShoppingBasket size={18} aria-hidden /> Add {analysis.missing.length} missing to list
+              <ShoppingBasket size={18} aria-hidden />{" "}
+              {analysis.missing.length > 0 && shortBy.size > 0
+                ? `Add ${analysis.missing.length} missing and ${shortBy.size} top-up${shortBy.size === 1 ? "" : "s"} to list`
+                : analysis.missing.length > 0
+                  ? `Add ${analysis.missing.length} missing to list`
+                  : `Add ${shortBy.size} top-up${shortBy.size === 1 ? "" : "s"} to list`}
             </Button>
           ) : (
             <p className="mt-3 text-sm text-ink-2">You have everything you need.</p>
           )}
+          <RecipeNutritionCard recipe={recipe} />
         </section>
 
         <section aria-labelledby="method-h" className="mt-8 lg:mt-0">
@@ -283,6 +372,8 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
         </section>
       </div>
 
+      {editable && editOpen && <EditRecipeSheet recipe={recipe} open={editOpen} onClose={() => setEditOpen(false)} />}
+      <CookMode open={cookModeOpen} onClose={() => setCookModeOpen(false)} recipe={recipe} factor={factor} onFinish={() => setCookOpen(true)} />
       <CookSheet open={cookOpen} onClose={() => setCookOpen(false)} recipe={recipe} uses={analysis.uses} factor={factor} />
 
       <Sheet
@@ -309,6 +400,12 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
       </Sheet>
     </article>
   );
+}
+
+/** Only recipes in your saved list can be edited; built-in and AI ideas are read-only until saved. */
+function isSavedRecipe(recipe: Recipe, saved: Recipe[]): boolean {
+  // Built-in recipes always load from the app's own copy, so edits wouldn't show.
+  return !recipe.id.startsWith("builtin-") && saved.some((r) => r.id === recipe.id);
 }
 
 function capitalise(text: string): string {

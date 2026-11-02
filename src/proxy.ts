@@ -11,6 +11,8 @@ const LIMIT = 20;
 const MAX_BODY: Record<string, number> = {
   "/api/scan": 9 * 1024 * 1024, // 8 MB photo plus form overhead
   "/api/parse-text": 128 * 1024,
+  // More specific paths first: routeKey takes the first prefix match.
+  "/api/recipes/import": 9 * 1024 * 1024, // recipe photo, or a small JSON body with a link
   "/api/recipes": 64 * 1024,
 };
 

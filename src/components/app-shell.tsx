@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { TimerRunner } from "@/components/recipes/timer-runner";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { BookOpen, CalendarDays, ChartColumn, Home, Plus, ShoppingBasket, Warehouse, Settings, WifiOff } from "lucide-react";
@@ -38,6 +39,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </Suspense>
       <main className="pb-tabbar mx-auto w-full max-w-3xl lg:px-10 lg:has-[[data-wide]]:max-w-6xl">{children}</main>
       <OfflinePill />
+      <Suspense fallback={null}>
+        <TimerRunner />
+      </Suspense>
       <Suspense fallback={null}>
         <MobileNav />
       </Suspense>

@@ -35,7 +35,8 @@ export async function POST(request: Request) {
     return error(400, "bad_request", "Send the photo as form data with an 'image' field.");
   }
 
-  const kind = form.get("kind") === "list" ? "list" : "receipt";
+  const rawKind = form.get("kind");
+  const kind = rawKind === "list" ? "list" : rawKind === "shelf" ? "shelf" : "receipt";
   const file = form.get("image");
   if (!(file instanceof File) || file.size === 0) {
     return error(400, "no_image", "No photo was received. Choose a photo and try again.");
@@ -61,6 +62,8 @@ export async function POST(request: Request) {
         "unreadable",
         kind === "receipt"
           ? "Couldn't find any items on that receipt. Try a flatter, well-lit photo of the whole receipt."
+          : kind === "shelf"
+            ? "Couldn't spot any food in that photo. Try a closer, well-lit shot of one shelf."
           : "Couldn't read any items on that list. Try a closer, well-lit photo.",
       );
     }

@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PantryItem } from "@/lib/types";
 import type { ReviewDraft } from "@/lib/drafts";
 
-export type AddMethod = "receipt" | "list" | "paste" | "barcode" | "manual";
+export type AddMethod = "receipt" | "list" | "shelf" | "paste" | "barcode" | "manual";
 
-export const METHODS: AddMethod[] = ["receipt", "list", "paste", "barcode", "manual"];
+export const METHODS: AddMethod[] = ["receipt", "list", "shelf", "paste", "barcode", "manual"];
 
 export function isMethod(v: string | null | undefined): v is AddMethod {
   return !!v && (METHODS as string[]).includes(v);
@@ -18,6 +18,8 @@ export interface AddSession {
   source: PantryItem["source"];
   storeName?: string | null;
   note?: string;
+  /** Shopping-list rows to take off the list when these drafts are added ("Put in the larder"). */
+  removeListIds?: string[];
   updatedAt: number;
 }
 
@@ -26,6 +28,7 @@ const KEY = (m: AddMethod) => `larder-add:${m}`;
 export const DEFAULT_SOURCE: Record<AddMethod, PantryItem["source"]> = {
   receipt: "receipt",
   list: "list",
+  shelf: "manual",
   paste: "list",
   barcode: "barcode",
   manual: "manual",
@@ -49,6 +52,11 @@ function writeSession(method: AddMethod, s: AddSession | null) {
   } catch {
     // Storage full or blocked: the review still works, it just won't survive a refresh.
   }
+}
+
+/** Start a review from elsewhere in the app (e.g. the shopping list). Open `/add?method=…&step=review` next. */
+export function startReviewSession(method: AddMethod, s: Omit<AddSession, "updatedAt">) {
+  writeSession(method, { ...s, updatedAt: Date.now() });
 }
 
 /** Methods with unfinished drafts, for the "pick up where you left off" banner. */

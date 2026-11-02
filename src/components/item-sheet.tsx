@@ -102,6 +102,14 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
 
   const [name, setName] = useState(item.name);
   const [offer, setOffer] = useState<RememberOffer | null>(null);
+  // "Move some": countable items with more than one can be split between spots.
+  const countable = ["item", "pack", "tin", "jar", "bottle", "loaf", "bunch"].includes(item.unit) && item.quantity >= 2 && Number.isInteger(item.quantity);
+  const [moveCount, setMoveCount] = useState<number | null>(null);
+  const moving = countable && moveCount !== null && moveCount < item.quantity ? moveCount : undefined;
+  const relocate = (to: string) => {
+    moveTo(item.id, to, notify, moving);
+    setMoveCount(null);
+  };
   const dateRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -200,6 +208,13 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
           </p>
         </div>
       </div>
+
+      {intent !== "still-good" && item.dateKind === "best-before" && expiry.status === "expired" && !expiry.estimated && (
+        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
+          Best before is about quality, not safety. If it looks, smells and tastes fine it&apos;s usually good to eat, so
+          check before you bin it.
+        </p>
+      )}
 
       {intent === "still-good" && (
         <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
@@ -302,7 +317,7 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
           <Segmented
             label="Stored in"
             value={item.locationId}
-            onChange={(v) => moveTo(item.id, v, notify)}
+            onChange={relocate}
             options={locations.map((l) => ({
               value: l.id,
               label: (
@@ -316,13 +331,30 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
         ) : (
           <div className="flex flex-wrap gap-2">
             {locations.map((l) => (
-              <Chip key={l.id} selected={l.id === item.locationId} onClick={() => moveTo(item.id, l.id, notify)}>
+              <Chip key={l.id} selected={l.id === item.locationId} onClick={() => relocate(l.id)}>
                 <LocationIcon kind={l.kind} />
                 {l.name}
               </Chip>
             ))}
           </div>
         )}
+        {countable &&
+          (moveCount === null ? (
+            <button type="button" onClick={() => setMoveCount(1)} className="self-start text-sm font-medium text-primary hover:underline min-h-11">
+              Only moving some?
+            </button>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2 text-sm text-ink-2">
+              <span>Move</span>
+              <Stepper label="how many to move" value={moveCount} min={1} onChange={(v) => setMoveCount(Math.min(item.quantity, Math.max(1, Math.round(v))))} />
+              <span>
+                of {item.quantity}, then tap where they&apos;re going.
+              </span>
+              <button type="button" onClick={() => setMoveCount(null)} className="min-h-11 font-medium text-primary hover:underline">
+                Move all
+              </button>
+            </div>
+          ))}
         {item.expiredWhenFrozen ? (
           <div className="flex flex-col items-start gap-2 rounded-2xl bg-spoiled-soft px-4 py-3 text-sm text-ink">
             <p className="flex gap-2">
