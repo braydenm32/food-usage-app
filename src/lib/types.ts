@@ -205,6 +205,18 @@ export interface ShoppingListItem {
   recipeId?: string;
 }
 
+/**
+ * A food the household always wants in stock ("Always keep in stock" on the item sheet).
+ * Matched to larder items by food type, or by name when there is none.
+ */
+export interface Staple {
+  id: string;
+  name: string;
+  foodTypeId: string | null;
+  emoji?: string;
+  addedAt: string;
+}
+
 export interface MealPlanEntry {
   id: string;
   date: string; // ISO date
