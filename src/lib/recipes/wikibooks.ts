@@ -28,6 +28,7 @@ export function cleanWikitext(text: string): string {
     .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, "");
   // Templates, innermost first ({{convert|..}} and friends carry no recipe words we can trust).
   for (let i = 0; i < 10 && /\{\{[^{}]*\}\}/.test(s); i++) s = s.replace(/\{\{[^{}]*\}\}/g, "");
+  s = s.replace(/\{\{[\s\S]*$/, ""); // an unclosed template runs to the end of the line
   // Internal links, innermost first: [[Cookbook:Onion|onions]] -> onions, [[File:...]] -> nothing.
   for (let i = 0; i < 10 && /\[\[[^[\]]*\]\]/.test(s); i++) {
     s = s.replace(/\[\[([^[\]|]*)(?:\|([^[\]]*))?\]\]/g, (_m, target: string, label?: string) => {
@@ -163,7 +164,19 @@ function tagsFrom(wikitext: string, summaryCategory?: string): string[] {
  * Parse one Cookbook page. Returns null for pages that aren't a usable recipe
  * (no ingredient list, ingredients in a table, fewer than two steps).
  */
-export function recipeFromWikibooks(page: { pageid: number; title: string; wikitext: string; url?: string }): Recipe | null {
+/** Stable id from the page title, so bundled recipes keep their id across snapshots. */
+export function wikibooksId(title: string): string {
+  const slug = title
+    .replace(/^cookbook:/i, "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `wb-${slug}`;
+}
+
+export function recipeFromWikibooks(page: { title: string; wikitext: string; url?: string }): Recipe | null {
   const { wikitext } = page;
   if (/^#redirect/i.test(wikitext.trim())) return null;
   const all = sections(wikitext);
@@ -202,7 +215,7 @@ export function recipeFromWikibooks(page: { pageid: number; title: string; wikit
   });
   return {
     ...recipe,
-    id: `wb-${page.pageid}`,
+    id: wikibooksId(page.title),
     source: "database",
     credit: {
       name: "Wikibooks Cookbook",

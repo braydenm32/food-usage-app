@@ -60,9 +60,9 @@ describe("recipeSummaryFields", () => {
 
 describe("recipeFromWikibooks", () => {
   it("parses a Cookbook page with credit and licence", () => {
-    const r = recipeFromWikibooks({ pageid: 123, title: "Cookbook:Lentil Soup", wikitext: PAGE });
+    const r = recipeFromWikibooks({ title: "Cookbook:Lentil Soup", wikitext: PAGE });
     expect(r).not.toBeNull();
-    expect(r!.id).toBe("wb-123");
+    expect(r!.id).toBe("wb-lentil-soup");
     expect(r!.title).toBe("Lentil Soup");
     expect(r!.servings).toBe(4);
     expect(r!.minutes).toBe(75);
@@ -87,9 +87,9 @@ describe("recipeFromWikibooks", () => {
   });
 
   it("skips pages that aren't usable recipes", () => {
-    expect(recipeFromWikibooks({ pageid: 1, title: "Cookbook:Onion", wikitext: "An onion is a vegetable.\n== Uses ==\n* Soup" })).toBeNull();
-    expect(recipeFromWikibooks({ pageid: 2, title: "Cookbook:X", wikitext: "#REDIRECT [[Cookbook:Y]]" })).toBeNull();
+    expect(recipeFromWikibooks({ title: "Cookbook:Onion", wikitext: "An onion is a vegetable.\n== Uses ==\n* Soup" })).toBeNull();
+    expect(recipeFromWikibooks({ title: "Cookbook:X", wikitext: "#REDIRECT [[Cookbook:Y]]" })).toBeNull();
     const tableIngredients = "== Ingredients ==\n{| class=wikitable\n| flour || 1 cup\n|}\n== Procedure ==\n# Mix.\n# Bake it.";
-    expect(recipeFromWikibooks({ pageid: 3, title: "Cookbook:Z", wikitext: tableIngredients })).toBeNull();
+    expect(recipeFromWikibooks({ title: "Cookbook:Z", wikitext: tableIngredients })).toBeNull();
   });
 });
