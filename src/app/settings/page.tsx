@@ -3,13 +3,14 @@
 import { useMealLog } from "@/lib/nutrition/meal-log";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, CalendarDays, ChartColumn, ChevronRight, Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Bell, CalendarDays, ChartColumn, ChevronDown, ChevronRight, Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { z } from "zod";
 import { DEFAULT_LOCATIONS, normalisePersisted, useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { notificationSupport, type NotificationSupport } from "@/lib/reminders";
+import { askForReminders, backgroundPushConfigured, browserSupportsPush, sendTestReminder } from "@/lib/push/client";
 import type { Diet, Settings, StorageLocation } from "@/lib/types";
 import { Button, Card, Chip, Field, IconButton, Input, PageHeader, Segmented, Stepper, Switch, cx } from "@/components/ui";
 import { toast } from "@/components/toast";
@@ -37,15 +38,59 @@ const HOURS = Array.from({ length: 24 }, (_, h) => ({
 
 /* ---------- Layout bits ---------- */
 
-/** A titled group of settings. Rows inside go in one or more `Group` cards. */
-function Section({ id, title, intro, children }: { id: string; title: string; intro?: string; children: React.ReactNode }) {
+/**
+ * A titled, collapsible group of settings. Closed, it shows a one-line summary so the page
+ * reads as a short list; `/settings#reminders` opens that section. Rows go in `Group` cards.
+ */
+function Section({
+  id,
+  title,
+  summary,
+  intro,
+  children,
+}: {
+  id: string;
+  title: string;
+  /** What's set now, shown under the title, e.g. "Daily at 5 pm". */
+  summary?: string;
+  intro?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  // Open the section a link points at (e.g. /settings#reminders from a nudge).
+  useEffect(() => {
+    const sync = () => {
+      if (window.location.hash === `#${id}`) setOpen(true);
+    };
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, [id]);
   return (
-    <section aria-labelledby={`${id}-heading`} className="mt-10 first:mt-2">
-      <h2 id={`${id}-heading`} className="font-display text-xl text-ink">
-        {title}
+    <section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-4 border-b border-line last:border-b-0">
+      <h2 id={`${id}-heading`}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={`${id}-panel`}
+          onClick={() => setOpen((o) => !o)}
+          className="flex min-h-16 w-full items-center gap-3 py-3 text-left"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block font-display text-xl text-ink">{title}</span>
+            {summary && <span className="block truncate text-sm text-ink-2">{summary}</span>}
+          </span>
+          <ChevronDown
+            size={20}
+            aria-hidden
+            className={cx("shrink-0 text-ink-3 transition-transform motion-reduce:transition-none", open && "rotate-180")}
+          />
+        </button>
       </h2>
-      {intro && <p className="mt-1 text-sm text-ink-2">{intro}</p>}
-      <div className="mt-3 flex flex-col gap-4">{children}</div>
+      <div id={`${id}-panel`} hidden={!open} className="pb-6">
+        {intro && <p className="mb-3 text-sm text-ink-2">{intro}</p>}
+        <div className="flex flex-col gap-4">{children}</div>
+      </div>
     </section>
   );
 }
@@ -254,7 +299,13 @@ export default function SettingsPage() {
     typeof window === "undefined" ? "default" : notificationSupport(),
   );
   const [pushNote, setPushNote] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
   const [confirmErase, setConfirmErase] = useState(false);
+  /** A parsed backup waiting for "Replace" to be confirmed. */
+  const [pendingImport, setPendingImport] = useState<{ data: z.infer<typeof importSchema>; exportedAt?: string } | null>(null);
+  const hasAccount = useSyncStatus((s) => Boolean(s.userId && s.householdId));
+  /** Reminders can arrive with Larder closed: push set up here, an account in a household, and a browser that can. */
+  const background = backgroundPushConfigured && hasAccount && (typeof window === "undefined" || browserSupportsPush());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const overrideRows = useMemo(
@@ -273,41 +324,63 @@ export default function SettingsPage() {
 
   const setPush = async (on: boolean) => {
     if (!on) {
+      // The reminder runner also removes this device's background subscription.
       setSettings({ pushEnabled: false });
       setPushNote(null);
       return;
     }
-    const sup = notificationSupport();
-    setSupport(sup);
-    if (sup === "unsupported") {
-      setPushNote("This browser can't show notifications. Try Chrome, Edge, Firefox or Safari on a Mac.");
-      return;
-    }
-    if (sup === "needs-install") {
-      setPushNote(
-        "On iPhone and iPad, notifications only work once Larder is on your Home Screen: tap Share, then “Add to Home Screen”, and open it from there.",
-      );
-      return;
-    }
-    if (sup === "denied") {
-      setPushNote("Notifications are blocked for this site. Allow them in your browser's site settings, then try again.");
-      return;
-    }
-    try {
-      const result = await Notification.requestPermission();
-      setSupport(result);
-      if (result === "granted") {
-        setSettings({ pushEnabled: true });
+    const result = await askForReminders();
+    setSupport(notificationSupport());
+    switch (result) {
+      case "background":
+        setPushNote(null);
+        toast("Reminders turned on. They'll arrive even when Larder is closed.");
+        break;
+      case "in-app":
         setPushNote(null);
         toast("Reminders turned on");
-      } else if (result === "denied") {
+        break;
+      case "unsupported":
+        setPushNote("This browser can't show notifications. Try Chrome, Edge, Firefox or Safari.");
+        break;
+      case "needs-install":
+        setPushNote(
+          "On iPhone and iPad, notifications only work once Larder is on your Home Screen: tap Share, then “Add to Home Screen”, and open it from there.",
+        );
+        break;
+      case "denied":
         setPushNote("Notifications are blocked for this site. Allow them in your browser's site settings, then try again.");
-      } else {
+        break;
+      default:
         setPushNote("No answer yet. Tap the switch again and choose Allow.");
-      }
-    } catch {
-      setPushNote("Couldn't ask for permission. Try again from the browser's address bar.");
     }
+  };
+
+  const testReminder = async () => {
+    setTesting(true);
+    const err = await sendTestReminder();
+    setTesting(false);
+    toast(err ?? "Sent. It should arrive in a few seconds.", err ? { tone: "error" } : undefined);
+  };
+
+  const removeSpot = (loc: StorageLocation) => {
+    const before = useLarder.getState();
+    const index = before.locations.findIndex((l) => l.id === loc.id);
+    const movedIds = new Set(before.items.filter((i) => i.locationId === loc.id).map((i) => i.id));
+    removeLocation(loc.id);
+    toast(movedIds.size ? `Removed ${loc.name}. Its food moved to the ${loc.kind}.` : `Removed ${loc.name}`, {
+      action: {
+        label: "Undo",
+        onClick: () =>
+          useLarder.setState((s) => ({
+            locations: s.locations.some((l) => l.id === loc.id)
+              ? s.locations
+              : [...s.locations.slice(0, index), loc, ...s.locations.slice(index)],
+            // Only food that's still where it was moved to goes back.
+            items: s.items.map((i) => (movedIds.has(i.id) && i.locationId === loc.kind ? { ...i, locationId: loc.id } : i)),
+          })),
+      },
+    });
   };
 
   const exportJson = () => {
@@ -338,18 +411,37 @@ export default function SettingsPage() {
         });
         return;
       }
-      const d = parsed.data;
-      // normalisePersisted keeps the built-in spots, fills missing arrays (diets, allergies…) and
-      // merges settings and profile over the defaults, the same as the store's own migrate.
-      useLarder.setState({
-        ...normalisePersisted({ ...d, settings: { ...settings, ...(d.settings as Partial<Settings>) } }),
-        undo: null,
-      });
-      toast(`Restored ${d.items.length} item${d.items.length === 1 ? "" : "s"} and your settings`);
+      const exportedAt =
+        raw && typeof raw === "object" && "exportedAt" in raw && typeof (raw as { exportedAt: unknown }).exportedAt === "string"
+          ? (raw as { exportedAt: string }).exportedAt
+          : undefined;
+      // Nothing changes until "Replace" is confirmed.
+      setPendingImport({ data: parsed.data, exportedAt });
     } catch {
       toast("Couldn't read that file. It should be a .json export from Larder.", { tone: "error" });
     }
   };
+
+  const confirmImport = () => {
+    if (!pendingImport) return;
+    const d = pendingImport.data;
+    // Notification permission belongs to this device, so a backup from another one never turns it on.
+    const imported = { ...(d.settings as Partial<Settings>), pushEnabled: settings.pushEnabled, onboarded: true };
+    // normalisePersisted keeps the built-in spots, fills missing arrays (diets, allergies…) and
+    // merges settings and profile over the defaults, the same as the store's own migrate.
+    useLarder.setState({ ...normalisePersisted({ ...d, settings: { ...settings, ...imported } }), undo: null });
+    setPendingImport(null);
+    toast(`Restored ${d.items.length} item${d.items.length === 1 ? "" : "s"} and your settings`);
+  };
+
+  const hourLabel = HOURS.find((h) => h.value === settings.digestHour)?.label ?? "";
+  const reminderSummary =
+    !settings.pushEnabled || settings.digest === "off"
+      ? "Off"
+      : settings.digest === "weekly"
+        ? `Sundays at ${hourLabel}`
+        : `Every day at ${hourLabel}`;
+  const customSpots = locations.length - DEFAULT_LOCATIONS.length;
 
   if (!hydrated) {
     return (
@@ -371,11 +463,15 @@ export default function SettingsPage() {
         subtitle={syncing ? "Theme and reminders are just for this device." : "Everything stays on this device."}
       />
       <div className="px-5 lg:px-0">
-        <div className="mt-2">
+        <div className="mt-2 mb-4">
           <SettingsSyncRow />
         </div>
         {/* Household */}
-        <Section id="household" title="Household">
+        <Section
+          id="household"
+          title="Your household"
+          summary={`${profile.people} ${profile.people === 1 ? "person" : "people"}${profile.diets.length ? ` · ${profile.diets.length} way${profile.diets.length === 1 ? "" : "s"} of eating` : ""}${profile.allergies.length ? ` · ${profile.allergies.length} allerg${profile.allergies.length === 1 ? "y" : "ies"}` : ""}`}
+        >
           <Group>
             <Row>
               <Field label="Household name">
@@ -432,7 +528,11 @@ export default function SettingsPage() {
         </Section>
 
         {/* Your kitchen: spots, overrides, planner, insights */}
-        <Section id="kitchen" title="Your kitchen">
+        <Section
+          id="kitchen"
+          title="Your kitchen"
+          summary={`${customSpots > 0 ? `${locations.length} storage spots` : "Fridge, freezer and pantry"} · meal planner ${settings.mealPlannerEnabled ? "on" : "off"}`}
+        >
           <Group id="spots" title="Storage spots" intro="Where food lives. Each spot uses the shelf life for its kind.">
             {locations.map((l) => {
               const custom = !DEFAULT_LOCATIONS.some((d) => d.id === l.id);
@@ -450,10 +550,7 @@ export default function SettingsPage() {
                     <IconButton
                       label={`Remove ${l.name}`}
                       className="ml-auto"
-                      onClick={() => {
-                        removeLocation(l.id);
-                        toast(`Removed ${l.name}. Its food moved to the ${l.kind}.`);
-                      }}
+                      onClick={() => removeSpot(l)}
                     >
                       <Trash2 size={18} />
                     </IconButton>
@@ -512,12 +609,12 @@ export default function SettingsPage() {
 
           <Group
             id="overrides"
-            title="Shelf-life overrides"
-            intro="When you correct a date, Larder remembers it for that food. Reset to go back to the standard estimate."
+            title="Dates you've corrected"
+            intro="When you change a date, Larder remembers how long that food lasts in your kitchen. Reset to go back to the usual estimate."
           >
             {overrideRows.length === 0 ? (
               <Row>
-                <p className="text-sm text-ink-2">No overrides yet.</p>
+                <p className="text-sm text-ink-2">Nothing yet. Change a date on any food and it shows up here.</p>
               </Row>
             ) : (
               overrideRows.map((o) => (
@@ -527,14 +624,14 @@ export default function SettingsPage() {
                       {o.emoji}
                     </span>
                   )}
-                  <RowLabel label={o.name} description={o.summary || "Custom estimate"} />
+                  <RowLabel label={o.name} description={o.summary || "Your own estimate"} />
                   <Button
                     variant="ghost"
                     size="sm"
                     className="ml-auto shrink-0"
                     onClick={() => {
                       removeOverride(o.id);
-                      toast(`Reset ${o.name} to the standard estimate`);
+                      toast(`Reset ${o.name} to the usual estimate`);
                     }}
                   >
                     <RotateCcw size={14} aria-hidden />
@@ -572,13 +669,41 @@ export default function SettingsPage() {
         <Section
           id="reminders"
           title="Reminders"
-          intro="A short digest of what to use. Reminders arrive when Larder is open or in the background on most phones; always-on reminders need an account, which is coming later."
+          summary={reminderSummary}
+          intro={
+            background
+              ? "A short note of what to use first. It arrives at the time you choose, even when Larder is closed."
+              : "A short note of what to use first, shown when you open Larder after the time you choose."
+          }
         >
           <Group>
+            <Row className="py-1">
+              <Switch
+                checked={settings.pushEnabled}
+                onChange={setPush}
+                label="Notifications"
+                description={
+                  settings.pushEnabled
+                    ? background
+                      ? "On for this device."
+                      : "On. Shown when you open Larder."
+                    : "Larder asks your permission the first time."
+                }
+              />
+              {pushNote && (
+                <p role="status" className="mb-3 flex gap-2 rounded-xl bg-soon-soft px-3 py-2 text-sm text-ink">
+                  <Bell size={16} aria-hidden className="mt-0.5 shrink-0 text-soon" />
+                  {pushNote}
+                </p>
+              )}
+              {!pushNote && support === "needs-install" && (
+                <p className="mb-3 text-xs text-ink-3">On iPhone, add Larder to your Home Screen first to get notifications.</p>
+              )}
+            </Row>
             <Row>
-              <p className="mb-2 text-sm font-medium text-ink-2">Digest</p>
+              <p className="mb-2 text-sm font-medium text-ink-2">How often</p>
               <Segmented
-                label="How often to send a digest"
+                label="How often to remind you"
                 value={settings.digest}
                 onChange={(digest) => setSettings({ digest })}
                 options={[
@@ -587,12 +712,16 @@ export default function SettingsPage() {
                   { value: "weekly", label: "Weekly" },
                 ]}
               />
-              {settings.digest === "weekly" && <p className="mt-2 text-xs text-ink-3">Weekly digests go out on Sunday.</p>}
+              {settings.digest === "weekly" && (
+                <p className="mt-2 text-xs text-ink-3">
+                  On Sundays.{background ? "" : " If you don't open Larder that day, it shows next time you do."}
+                </p>
+              )}
             </Row>
             <Row className="flex items-center justify-between gap-4">
-              <RowLabel label="Time of day" description="Local time, when you're likely planning dinner." />
+              <RowLabel label="Time of day" description="Your local time. Around when you plan dinner works well." />
               <select
-                aria-label="Time of day for the digest"
+                aria-label="Time of day for reminders"
                 value={settings.digestHour}
                 onChange={(e) => setSettings({ digestHour: Number(e.target.value) })}
                 className="h-11 shrink-0 rounded-full border border-line bg-surface px-3 text-sm font-medium text-ink"
@@ -614,32 +743,33 @@ export default function SettingsPage() {
                 suffix={settings.useSoonDays === 1 ? "day" : "days"}
               />
             </Row>
-            <Row className="py-1">
-              <Switch
-                checked={settings.pushEnabled}
-                onChange={setPush}
-                label="Push notifications"
-                description={
-                  settings.pushEnabled
-                    ? "On. Larder will show a digest when it's due."
-                    : "Needs your permission the first time."
-                }
-              />
-              {pushNote && (
-                <p role="status" className="mb-3 flex gap-2 rounded-xl bg-soon-soft px-3 py-2 text-sm text-ink">
-                  <Bell size={16} aria-hidden className="mt-0.5 shrink-0 text-soon" />
-                  {pushNote}
+            {background && settings.pushEnabled && settings.digest !== "off" && (
+              <Row className="flex items-center justify-between gap-4">
+                <RowLabel label="Check it works" description="Sends today's reminder to this device now." />
+                <Button variant="secondary" size="sm" className="shrink-0" onClick={testReminder} disabled={testing}>
+                  {testing ? "Sending…" : "Send a test"}
+                </Button>
+              </Row>
+            )}
+            {backgroundPushConfigured && !hasAccount && (
+              <Row>
+                <p className="text-sm text-ink-2">
+                  Reminders while Larder is closed need an account.{" "}
+                  <Link href="/account" className="font-medium text-primary underline-offset-2 hover:underline">
+                    Sign in or create one
+                  </Link>
                 </p>
-              )}
-              {!pushNote && support === "needs-install" && (
-                <p className="mb-3 text-xs text-ink-3">On iPhone, add Larder to your Home Screen first to get notifications.</p>
-              )}
-            </Row>
+              </Row>
+            )}
           </Group>
         </Section>
 
         {/* Appearance */}
-        <Section id="appearance" title="Appearance">
+        <Section
+          id="appearance"
+          title="Appearance"
+          summary={settings.theme === "system" ? "Matches your device" : settings.theme === "dark" ? "Dark" : "Light"}
+        >
           <Group>
             <Row>
               <Segmented
@@ -659,10 +789,11 @@ export default function SettingsPage() {
         {/* Data */}
         <Section
           id="data"
-          title="Your data"
+          title="Back up and restore"
+          summary="Save a copy, restore one, or start again"
           intro={
             syncing
-              ? `Larder keeps a copy in this browser and syncs it with ${syncingWith}. Importing a file replaces the household's food too.`
+              ? `Larder keeps a copy in this browser and syncs it with ${syncingWith}. Restoring a backup replaces the household's food too.`
               : "Larder keeps everything in this browser. Export a copy to move it or keep it safe."
           }
         >
@@ -674,7 +805,7 @@ export default function SettingsPage() {
               </Button>
               <Button variant="secondary" onClick={() => fileRef.current?.click()}>
                 <Upload size={16} aria-hidden />
-                Import from a file
+                Restore from a file
               </Button>
               <input
                 ref={fileRef}
@@ -688,6 +819,34 @@ export default function SettingsPage() {
                   e.target.value = "";
                 }}
               />
+              {pendingImport && (
+                <div
+                  className="mt-1 w-full rounded-xl bg-soon-soft p-3"
+                  role="alertdialog"
+                  aria-labelledby="import-heading"
+                  aria-describedby="import-body"
+                >
+                  <p id="import-heading" className="text-sm font-medium text-ink">
+                    Replace what&apos;s here with this backup?
+                  </p>
+                  <p id="import-body" className="mt-1 text-sm text-ink-2">
+                    The backup has {pendingImport.data.items.length} item{pendingImport.data.items.length === 1 ? "" : "s"}
+                    {pendingImport.exportedAt
+                      ? ` and was saved on ${new Date(pendingImport.exportedAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}`
+                      : ""}
+                    . It replaces the {items.length} item{items.length === 1 ? "" : "s"}, list and history on this device
+                    {syncing ? ` and in ${syncingWith}` : ""}. Export a copy first if you might want them back.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setPendingImport(null)} autoFocus>
+                      Keep what I have
+                    </Button>
+                    <Button size="sm" onClick={confirmImport}>
+                      Replace with backup
+                    </Button>
+                  </div>
+                </div>
+              )}
             </Row>
             <Row className="flex items-center justify-between gap-4">
               <RowLabel label="Sample food" description="Adds a week-old shop so you can see how things look." />
@@ -753,7 +912,7 @@ export default function SettingsPage() {
         </Section>
 
         {/* About */}
-        <Section id="about" title="About Larder">
+        <Section id="about" title="About Larder" summary={`Version ${APP_VERSION} · how dates are estimated`}>
           <Group>
             <Row>
               <p className="text-sm text-ink-2">

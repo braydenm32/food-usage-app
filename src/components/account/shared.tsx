@@ -109,10 +109,10 @@ export function Notice({ tone = "info", children }: { tone?: "info" | "error" | 
 export function NotConfigured() {
   return (
     <Card className="p-5">
-      <p className="font-display text-xl text-ink">Sync isn&apos;t set up on this server</p>
+      <p className="font-display text-xl text-ink">Accounts aren&apos;t available here yet</p>
       <p className="mt-2 text-[15px] text-ink-2">
-        Larder works fully on this device without an account. Sharing with your household and syncing between devices needs a
-        Supabase project connected to this copy of Larder; whoever runs it can follow the setup steps in the README.
+        Larder works fully on this device without an account. Sharing with your household, syncing between devices and
+        reminders while Larder is closed will appear here once accounts are switched on.
       </p>
     </Card>
   );
