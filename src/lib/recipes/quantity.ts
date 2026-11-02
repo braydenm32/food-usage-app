@@ -96,7 +96,7 @@ const toStep = (n: number, step: number) => Math.max(step, Math.round(n / step) 
 
 function niceMetricAmount(n: number): number {
   if (n < 20) return Math.round(n * 10) / 10 >= 10 ? Math.round(n) : Math.round(n * 10) / 10;
-  if (n < 100) return Math.round(n / 5) * 5;
+  if (n < 250) return Math.round(n / 5) * 5;
   if (n < 1000) return Math.round(n / 10) * 10;
   return Math.round(n / 50) * 50;
 }
@@ -113,6 +113,8 @@ export function displayIngredient(ing: RecipeIngredient, factor: number, tbspMl:
   const out: RecipeIngredient = { ...s };
   const scaled = Math.abs(factor - 1) > 1e-6;
   if (unit === "g" || unit === "ml") {
+    // As written, amounts stay exactly as the recipe says (225 g is 225 g).
+    if (!scaled) return out;
     out.quantity = fix(s.quantity, niceMetricAmount);
     out.quantityMax = fix(s.quantityMax, niceMetricAmount);
   } else if (!scaled) {

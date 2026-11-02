@@ -80,7 +80,11 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
     setUseItem(useParam);
   }
 
-  const ranked = useMemo(() => rankRecipes(BUILTIN_RECIPES, views, profile), [views, profile]);
+  const ranked = useMemo(() => {
+    const r = rankRecipes(BUILTIN_RECIPES, views, profile);
+    // Nothing in the larder to rank by: show dinners first.
+    return views.length === 0 ? [...r].sort((a, b) => Number(b.recipe.tags.includes("dinner")) - Number(a.recipe.tags.includes("dinner"))) : r;
+  }, [views, profile]);
 
   // Items worth offering as "uses ..." chips: at-risk, and actually used by some recipe.
   const useChips = useMemo(() => {
