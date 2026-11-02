@@ -84,7 +84,9 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
           aria-autocomplete="list"
           aria-activedescendant={options > 0 ? `${listId}-${active}` : undefined}
           autoComplete="off"
-          enterKeyHint="done"
+          // Standing at the fridge: ready to type straight away. Enter adds the food.
+          autoFocus
+          enterKeyHint="enter"
           placeholder="Search or type a food, e.g. 500g mince"
           value={query}
           onChange={(e) => {
@@ -128,7 +130,7 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
                 <span aria-hidden className="text-2xl">
                   {f.emoji}
                 </span>
-                <span className="flex-1 text-[15px] font-medium text-ink">{f.name}</span>
+                <span className="min-w-0 flex-1 break-words text-[15px] font-medium text-ink">{f.name}</span>
                 <span className="text-xs capitalize text-ink-3">{f.defaultLocation}</span>
               </li>
             ))}
@@ -148,8 +150,8 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
                 <span aria-hidden className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 text-ink-2">
                   <Type size={16} />
                 </span>
-                <span className="flex-1 text-[15px] text-ink">
-                  Add “<span className="font-medium">{trimmed}</span>”
+                <span className="min-w-0 flex-1 break-words text-[15px] text-ink [overflow-wrap:anywhere]">
+                  Add “<span className="font-medium">{trimmed.length > 80 ? `${trimmed.slice(0, 80)}…` : trimmed}</span>”
                 </span>
               </li>
             )}

@@ -36,6 +36,8 @@ export interface ReviewDraft extends DraftItem {
   suggestion?: { foodTypeId: string; name: string; emoji: string };
   /** When set, this line tops up that existing larder item instead of adding a new one. */
   mergeIntoId?: string;
+  /** The shopper said a printed date that looked far off is right (see checkPrintedDate). */
+  dateConfirmed?: boolean;
 }
 
 /* ---------- Units ---------- */
@@ -306,6 +308,13 @@ export function tidyName(name: string): string {
 }
 
 export function lineToDraft(line: ParsedLine): ReviewDraft {
+  const draft = lineToDraftUnchecked(line);
+  // A printed date that looks far off (often a misread) waits for the shopper to confirm it.
+  if (draft.include && checkPrintedDate(draft.printedDate) !== "ok") draft.include = false;
+  return draft;
+}
+
+function lineToDraftUnchecked(line: ParsedLine): ReviewDraft {
   // "carrots 1kg bag": the bag is packaging, not a carry bag.
   const raw = line.rawText ? (stripPackaging(line.rawText)?.text ?? line.rawText) : "";
   const isFood = line.isFood ?? !isLikelyNonFood(`${line.name} ${raw}`);
@@ -436,7 +445,7 @@ export function applyFoodType(draft: ReviewDraft, foodTypeId: string): ReviewDra
     unit: keepAmount ? draft.unit : food.defaultUnit,
     confidence: "high",
     isFood: true,
-    include: true,
+    include: !!draft.dateConfirmed || checkPrintedDate(draft.printedDate) === "ok",
     suggestion: undefined,
     mergeIntoId: undefined,
   };
