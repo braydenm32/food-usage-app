@@ -99,4 +99,12 @@ describe("isDigestDue", () => {
     expect(isDigestDue(weekly, null, sun18)).toBe(true);
     expect(isDigestDue(weekly, new Date(2026, 10, 1, 17, 1).toISOString(), sun18)).toBe(false);
   });
+
+  it("shows a missed weekly digest on the next open", () => {
+    const weekly = { ...base, digest: "weekly" as const };
+    const mon9 = new Date(2026, 10, 2, 9, 0);
+    // Last shown the Sunday before; Larder wasn't opened on Sunday 1 Nov.
+    expect(isDigestDue(weekly, new Date(2026, 9, 25, 17, 30).toISOString(), mon9)).toBe(true);
+    expect(isDigestDue(weekly, new Date(2026, 10, 1, 19, 0).toISOString(), mon9)).toBe(false);
+  });
 });
