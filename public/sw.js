@@ -2,7 +2,7 @@
 // Bump the version when the caching rules or shell change; old caches are deleted on activate.
 const VERSION = 4;
 const CACHE = `larder-v${VERSION}`;
-const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/welcome", "/account"];
+const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/nutrition", "/welcome", "/account"];
 
 /** Only cache complete, same-origin successes (no errors, redirects or opaque responses). */
 const cacheable = (res) => res && res.ok && res.type === "basic";

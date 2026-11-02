@@ -11,6 +11,10 @@ import { getFoodType } from "@/lib/shelf-life/foods";
 import { storageDays } from "@/lib/shelf-life/engine";
 import type { RecipeUse } from "@/lib/recipes/suggest";
 import type { DraftItem, PantryItem, Recipe } from "@/lib/types";
+import { hasFoodData, recipeNutrition } from "@/lib/nutrition/engine";
+import { scaleNutrients } from "@/lib/nutrition/nutrients";
+import { useMealLog } from "@/lib/nutrition/meal-log";
+import { toLocalISODate } from "@/lib/shelf-life/engine";
 
 interface Props {
   open: boolean;
@@ -59,7 +63,32 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
   const leftoverFood = getFoodType("leftovers-meal");
   const leftoverDays = leftoverFood ? storageDays(leftoverFood, undefined, "fridge") : 3;
 
+  // Nutrition: log how many servings you ate (only when the food database is in this build).
+  const logMeal = useMealLog((s) => s.logMeal);
+  const removeMeal = useMealLog((s) => s.removeMeal);
+  const canLog = hasFoodData() && recipe.ingredients.length > 0;
+  const [logIt, setLogIt] = useState(canLog);
+  const [ate, setAte] = useState(1);
+
+  function logEaten(): string | null {
+    if (!canLog || !logIt || ate <= 0) return null;
+    const nut = recipeNutrition(recipe, recipe.servings);
+    const per = 1 / Math.max(1, recipe.servings);
+    const now = new Date();
+    return logMeal({
+      at: now.toISOString(),
+      date: toLocalISODate(now),
+      recipeId: recipe.id,
+      title: recipe.title,
+      servings: ate,
+      perServing: nut.perServing,
+      contributors: nut.rows.filter((r) => r.food && r.grams).map((r) => ({ name: r.ingredient.name, n: scaleNutrients(r.nutrients, per) })),
+    });
+  }
+
   function confirm() {
+    const mealId = logEaten();
+    const logged = mealId ? ` Logged ${ate} serving${ate === 1 ? "" : "s"}.` : "";
     const parts = changed.map((r) => {
       const left = Math.round((r.item.quantity - (amounts[r.item.id] ?? 0)) * 1000) / 1000;
       return left <= 0 ? `${r.item.name} used up` : `${r.item.name}: ${formatQuantity(left, r.item.unit)} left`;
@@ -87,7 +116,9 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
         leftovers,
       );
       const tail = leftovers ? `Leftovers saved in the fridge for ${leftoverDays} days` : "";
-      toast([summary, tail].filter(Boolean).join(". "), { undoable: true });
+      toast([summary, tail].filter(Boolean).join(". ") + logged, { undoable: true });
+    } else if (mealId) {
+      toast(`Logged ${ate} serving${ate === 1 ? "" : "s"} of ${recipe.title}`, { action: { label: "Undo", onClick: () => removeMeal(mealId) } });
     } else {
       toast("Enjoy! Nothing in your larder changed.");
     }
@@ -169,6 +200,17 @@ function CookSheetInner({ open, onClose, recipe, uses, factor }: Props) {
             })}
           </ul>
         </>
+      )}
+      {canLog && (
+        <div className="mt-2 border-t border-line">
+          <Switch checked={logIt} onChange={setLogIt} label="Log what I ate" description="Adds it to your nutrition for today. Only on this device." />
+          {logIt && (
+            <div className="flex items-center justify-between gap-3 pb-3">
+              <span className="text-[15px] text-ink-2">Servings I ate</span>
+              <Stepper label="servings eaten" value={ate} step={0.5} min={0.5} onChange={(v) => setAte(Math.max(0.5, v))} />
+            </div>
+          )}
+        </div>
       )}
       <div className="mt-2 border-t border-line">
         <Switch

@@ -10,6 +10,7 @@ import { toast } from "@/components/toast";
 import { CookSheet } from "@/components/recipes/cook-sheet";
 import { CookMode } from "@/components/recipes/cook-mode";
 import { EditRecipeSheet } from "@/components/recipes/edit-recipe-sheet";
+import { RecipeNutritionCard } from "@/components/nutrition/recipe-nutrition";
 import { useCookTimers } from "@/lib/cook-timers";
 import { getBuiltinRecipe } from "@/lib/recipes/builtin";
 import { readCachedRecipe, cacheRecipes } from "@/lib/recipes/cache";
@@ -323,6 +324,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           ) : (
             <p className="mt-3 text-sm text-ink-2">You have everything you need.</p>
           )}
+          <RecipeNutritionCard recipe={recipe} />
         </section>
 
         <section aria-labelledby="method-h" className="mt-8 lg:mt-0">
