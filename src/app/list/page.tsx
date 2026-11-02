@@ -564,7 +564,7 @@ function ListRow({
 }) {
   const food = getFoodType(item.foodTypeId);
   const q = quantityLabel(item);
-  const why = item.reason ? REASON_LABEL[item.reason] : null;
+  const why = item.note ?? (item.reason ? REASON_LABEL[item.reason] : null);
   return (
     <div className="flex items-center gap-1 pr-1">
       <button

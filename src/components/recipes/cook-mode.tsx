@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BellRing, ChefHat, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pause, Play, Plus, Timer, X } from "lucide-react";
 import { Button, IconButton } from "@/components/ui";
 import { askTimerNotifications, secondsLeft, unlockAlarm, useCookTimers } from "@/lib/cook-timers";
-import { formatAmount, scaleIngredient } from "@/lib/recipes/quantity";
+import { displayIngredient, formatAmount, ingredientName, tbspOf } from "@/lib/recipes/quantity";
+import { useLarder } from "@/lib/store";
 import { findTimers, formatClock } from "@/lib/recipes/timers";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
 
@@ -113,9 +114,13 @@ export function CookMode({
   const found = useMemo(() => findTimers(current), [current]);
   const stepIngredients = useMemo(() => ingredientsForStep(current, recipe.ingredients), [current, recipe.ingredients]);
 
+  const saveRecipe = useLarder((s) => s.saveRecipe);
+  const isSaved = useLarder((s) => s.savedRecipes.some((r) => r.id === recipe.id));
   function startTimer(label: string, seconds: number) {
     unlockAlarm();
     askTimerNotifications();
+    // The timer links back to this recipe, so AI and library ideas need to outlive this visit.
+    if (!recipe.id.startsWith("builtin-") && !isSaved) saveRecipe(recipe);
     const n = clock();
     setNow(n);
     start({ label, recipeId: recipe.id, recipeTitle: recipe.title, step: at, total: seconds }, n);
@@ -196,10 +201,10 @@ export function CookMode({
                 <h2 className="mb-2 text-sm font-semibold text-ink-2">Ingredients</h2>
                 <ul className="mb-6 space-y-1 text-[17px]">
                   {recipe.ingredients.map((ing, i) => {
-                    const s = scaleIngredient(ing, factor);
+                    const s = displayIngredient(ing, factor, tbspOf(recipe));
                     return (
                       <li key={i}>
-                        <span className="font-semibold">{formatAmount(s.quantity, s.unit, s.quantityMax)}</span> {ing.name}
+                        <span className="font-semibold">{formatAmount(s.quantity, s.unit, s.quantityMax)}</span> {ingredientName(ing.name, s.quantity, s.unit)}
                         {ing.note && <span className="text-ink-3">, {ing.note}</span>}
                       </li>
                     );
@@ -233,11 +238,14 @@ export function CookMode({
 
             {found.length > 0 && (
               <div className="mt-5 flex flex-wrap gap-2">
-                {found.map((f) => (
-                  <Button key={f.label} variant="secondary" size="lg" onClick={() => startTimer(f.label, f.seconds)}>
-                    <Timer size={20} aria-hidden /> Start {f.label} timer
-                  </Button>
-                ))}
+                {found.map((f) => {
+                  const going = running.some((t) => t.step === at && t.label === f.label);
+                  return (
+                    <Button key={f.label} variant="secondary" size="lg" disabled={going} onClick={() => startTimer(f.label, f.seconds)}>
+                      <Timer size={20} aria-hidden /> {going ? `${f.label} timer running` : `Start ${f.label} timer`}
+                    </Button>
+                  );
+                })}
               </div>
             )}
 
@@ -246,10 +254,10 @@ export function CookMode({
                 <h2 className="mb-2 text-sm font-semibold text-ink-2">For this step</h2>
                 <ul className="space-y-1 text-[17px]">
                   {stepIngredients.map((ing, i) => {
-                    const s = scaleIngredient(ing, factor);
+                    const s = displayIngredient(ing, factor, tbspOf(recipe));
                     return (
                       <li key={i}>
-                        <span className="font-semibold">{formatAmount(s.quantity, s.unit, s.quantityMax)}</span> {ing.name}
+                        <span className="font-semibold">{formatAmount(s.quantity, s.unit, s.quantityMax)}</span> {ingredientName(ing.name, s.quantity, s.unit)}
                         {ing.note && <span className="text-ink-3">, {ing.note}</span>}
                       </li>
                     );

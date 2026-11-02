@@ -189,6 +189,7 @@ function parseProfile(d: Obj): HouseholdProfile {
     allergies: strArr(d.allergies),
     likes: strArr(d.likes),
     dislikes: strArr(d.dislikes),
+    ...(d.confirmed === true ? { confirmed: true } : {}),
   };
 }
 
@@ -227,7 +228,7 @@ function parseRecipe(id: string, d: Obj): Recipe | null {
 function parseListItem(id: string, d: Obj): ShoppingListItem | null {
   if (!isStr(d.name) || typeof d.checked !== "boolean" || !isDate(d.addedAt)) return null;
   return {
-    ...pick(d, { quantity: isNum, unit: isStr, reason: isListReason, recipeId: isStr }),
+    ...pick(d, { quantity: isNum, unit: isStr, reason: isListReason, recipeId: isStr, note: isStr }),
     id,
     name: d.name,
     foodTypeId: foodTypeIdOf(d.foodTypeId),
@@ -240,7 +241,8 @@ function parseListItem(id: string, d: Obj): ShoppingListItem | null {
 
 function parseMealPlan(id: string, d: Obj): MealPlanEntry | null {
   if (!isDate(d.date) || !isStr(d.recipeId)) return null;
-  return { ...pick(d, { servings: isNum }), id, date: d.date, recipeId: d.recipeId };
+  const copy = isObj(d.recipe) && isStr((d.recipe as Obj).id) ? parseRecipe((d.recipe as Obj).id as string, d.recipe as Obj) : null;
+  return { ...pick(d, { servings: isNum, cookedAt: isStr }), ...(copy ? { recipe: copy } : {}), id, date: d.date, recipeId: d.recipeId };
 }
 
 /** Validate and tidy a record from the server. Returns null for anything unusable. */

@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Camera, CircleAlert, Link2, Loader2, TriangleAlert, X } from "lucide-react";
+import { Camera, CircleAlert, Link2, Loader2, PenLine, TriangleAlert, X } from "lucide-react";
 import { Button, Field, Input, Segmented, Sheet } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { downscaleImage } from "@/components/add/image";
 import { formatAmount } from "@/lib/recipes/quantity";
+import { EditRecipeSheet, blankRecipe } from "./edit-recipe-sheet";
 import { useLarder } from "@/lib/store";
 import type { Recipe } from "@/lib/types";
 
@@ -28,6 +29,7 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
   const [title, setTitle] = useState("");
   const [tbsp, setTbsp] = useState<"20" | "15">("20");
   const [aiReady, setAiReady] = useState<boolean | null>(null);
+  const [writeOpen, setWriteOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const saveRecipe = useLarder((s) => s.saveRecipe);
@@ -109,6 +111,12 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
     onClose(savedIt);
   }
 
+  /** No link, no AI: type or paste it in by hand. */
+  function writeItIn() {
+    close();
+    setWriteOpen(true);
+  }
+
   const preview = state.kind === "done" ? state.recipe : null;
   const duplicate = preview?.sourceUrl ? saved.find((r) => r.sourceUrl === preview.sourceUrl) : undefined;
   const flagged = preview ? preview.ingredients.filter((i) => looksOff(i.name)).length : 0;
@@ -128,6 +136,8 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
   }
 
   return (
+    <>
+    {writeOpen && <EditRecipeSheet isNew recipe={blankRecipe()} open={writeOpen} onClose={() => setWriteOpen(false)} />}
     <Sheet
       open={open}
       onClose={() => close()}
@@ -180,10 +190,6 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
             </p>
           )}
           <div className="flex gap-3">
-            {preview.image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={preview.image} alt="" className="h-20 w-20 shrink-0 rounded-2xl bg-surface-2 object-cover" />
-            )}
             <div className="min-w-0 flex-1">
               <Field label="Title">
                 {(id) => (
@@ -298,7 +304,7 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
           ) : (
             <p className="text-[15px] text-ink-2">
               {aiReady === false
-                ? "Reading photos needs the AI helper, which isn't set up yet. Paste a link instead."
+                ? "Reading photos needs the AI helper, which isn't set up on this device. Paste a link, or write the recipe in yourself."
                 : "Snap a cookbook page or recipe card, or pick a screenshot. We'll copy out the ingredients and method."}
             </p>
           )}
@@ -322,8 +328,16 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
               )}
             </div>
           )}
+          <button
+            type="button"
+            onClick={writeItIn}
+            className="inline-flex min-h-11 items-center gap-2 rounded-full px-1 text-[15px] font-semibold text-primary hover:underline"
+          >
+            <PenLine size={18} aria-hidden /> Write it in yourself
+          </button>
         </div>
       )}
     </Sheet>
+    </>
   );
 }

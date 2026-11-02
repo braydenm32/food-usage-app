@@ -43,7 +43,8 @@ export const DEFAULT_SETTINGS: Settings = {
   digestHour: 17,
   pushEnabled: false,
   useSoonDays: 2,
-  mealPlannerEnabled: false,
+  // A weekly habit, on for everyone; Settings can turn it off.
+  mealPlannerEnabled: true,
   onboarded: false,
 };
 
@@ -215,8 +216,14 @@ export interface LarderState {
   removeListItem: (id: string) => void;
   clearChecked: () => void;
 
-  planMeal: (date: string, recipe: Recipe) => void;
+  /**
+   * Plan a recipe for a day, for `servings` people. Doesn't add it to Saved: built-in and saved
+   * recipes are looked up by id, anything else is kept as a copy on the plan entry.
+   */
+  planMeal: (date: string, recipe: Recipe, servings?: number) => void;
   unplanMeal: (id: string) => void;
+  /** Mark a planned meal cooked (or not, with null). */
+  setPlanCooked: (id: string, cooked: boolean) => void;
 
   resetAll: () => void;
   loadDemoData: () => void;
@@ -669,14 +676,19 @@ export const useLarder = create<LarderState>()(
         clearChecked: () =>
           act("Cleared ticked items", (s) => ({ shoppingList: s.shoppingList.filter((l) => !l.checked) })),
 
-        planMeal: (date, recipe) =>
-          set((s) => ({
-            mealPlan: [...s.mealPlan, { id: uid(), date, recipeId: recipe.id }],
-            savedRecipes: s.savedRecipes.some((r) => r.id === recipe.id)
-              ? s.savedRecipes
-              : [{ ...recipe, savedAt: nowISO() }, ...s.savedRecipes],
-          })),
+        planMeal: (date, recipe, servings) =>
+          set((s) => {
+            const entry: MealPlanEntry = { id: uid(), date, recipeId: recipe.id };
+            if (servings && servings > 0) entry.servings = Math.round(servings);
+            const keepCopy = !recipe.id.startsWith("builtin-") && !s.savedRecipes.some((r) => r.id === recipe.id);
+            if (keepCopy) entry.recipe = recipe;
+            return { mealPlan: [...s.mealPlan, entry] };
+          }),
         unplanMeal: (id) => set((s) => ({ mealPlan: s.mealPlan.filter((m) => m.id !== id) })),
+        setPlanCooked: (id, cooked) =>
+          set((s) => ({
+            mealPlan: s.mealPlan.map((m) => (m.id === id ? { ...m, cookedAt: cooked ? nowISO() : undefined } : m)),
+          })),
 
         resetAll: () => set({ ...initialData(), undo: null }),
         loadDemoData: () => {
@@ -689,7 +701,7 @@ export const useLarder = create<LarderState>()(
     },
     {
       name: STORAGE_KEY,
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => safeStorage),
       partialize: (s) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -697,7 +709,12 @@ export const useLarder = create<LarderState>()(
         return Object.fromEntries(Object.entries(rest).filter(([, v]) => typeof v !== "function"));
       },
       // v1 → v2: nothing renamed; fill anything missing (older saves, hand-edited imports).
-      migrate: (persisted) => normalisePersisted(persisted) as unknown as LarderState,
+      // v2 → v3: the meal planner became on by default, so switch it on once for existing households.
+      migrate: (persisted, version) => {
+        const next = normalisePersisted(persisted);
+        if (version < 3) next.settings = { ...next.settings, mealPlannerEnabled: true };
+        return next as unknown as LarderState;
+      },
       // Deep-merge settings/profile so new defaults appear for existing households.
       merge: (persisted, current) => ({ ...current, ...normalisePersisted(persisted) }),
     },

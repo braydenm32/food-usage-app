@@ -142,6 +142,8 @@ export interface HouseholdProfile {
   allergies: string[];
   likes: string[];
   dislikes: string[];
+  /** Set once the household has answered (or skipped) "Cooking for how many?" on Recipes. */
+  confirmed?: boolean;
 }
 
 export interface RecipeIngredient {
@@ -189,6 +191,8 @@ export interface Recipe {
   savedAt?: string;
   /** Tablespoon size the recipe was written with. Australian recipes use 20 ml; most others 15 ml. */
   tbspMl?: 15 | 20;
+  /** The source didn't say how many it serves, so `servings` is our guess. */
+  servingsEstimated?: boolean;
 }
 
 export interface ShoppingListItem {
@@ -203,13 +207,20 @@ export interface ShoppingListItem {
   /** Why it is on the list. */
   reason?: "manual" | "recipe" | "staple" | "plan";
   recipeId?: string;
+  /** Extra detail, e.g. the recipe's own amount ("6 slices for French toast"). */
+  note?: string;
 }
 
 export interface MealPlanEntry {
   id: string;
   date: string; // ISO date
   recipeId: string;
+  /** How many this meal is for. The recipe itself is never changed to match. */
   servings?: number;
+  /** When it was cooked (from "I cooked this"). */
+  cookedAt?: string;
+  /** A copy of a recipe that isn't built in or saved (an AI idea), so the plan can still open it. */
+  recipe?: Recipe;
 }
 
 export interface Settings {

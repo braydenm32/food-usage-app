@@ -150,9 +150,9 @@ const ANIMAL_EXTRA = re("gelatin|gelatine|lard|tallow|worcestershire|fish sauce|
 const PORK = re("pork|bacon|hams?|prosciutto|pancetta|chorizo|salami|lard|pepperoni|mortadella|gammon|speck|jamon|pork belly");
 const ALCOHOL = re("wine|red wine|white wine|beer|rum|vodka|whisky|whiskey|brandy|sherry|port|liqueur|gin|mirin|sake|marsala|cider|champagne|prosecco");
 const CARBY_MAIN = re(
-  "pasta|spaghetti|spaghettini|penne|fettuccine|fettucine|linguine|tagliatelle|pappardelle|rigatoni|fusilli|farfalle|macaroni|lasagn?es?|orzo|gnocchi|noodles?|ramen|udon|soba|rice|basmati|jasmine|arborio|risotto|bread|sourdough|baguette|ciabatta|toast|wraps?|tortillas?|pitas?|naan|roti|buns?|bagels?|pizza bases?|couscous|potato|potatoes|hot chips|fries|quinoa",
+  "pasta|spaghetti|spaghettini|penne|fettuccine|fettucine|linguine|tagliatelle|pappardelle|rigatoni|fusilli|farfalle|macaroni|lasagn?es?|orzo|gnocchi|noodles?|ramen|udon|soba|rice|basmati|jasmine|arborio|risotto|bread|sourdough|baguette|ciabatta|toast|wraps?|tortillas?|pitas?|naan|roti|buns?|bagels?|pizza bases?|couscous|potato|potatoes|hot chips|fries|quinoa|flours?|sugars?|caster sugar|icing sugar|honey|syrups?|golden syrup|maple syrup|treacle|bananas?|corn chips|tortilla chips|taco shells?",
 );
-const NOT_CARBY = /\b(?:rice (?:vinegar|wine|paper|bran|malt|flour)|cauliflower rice|konjac|shirataki|zucchini noodles?|zoodles?|egg noodles? free|breadcrumbs?|bread crumbs?|panko|lettuce wraps?|cabbage wraps?|rice paper)\b/g;
+const NOT_CARBY = /\b(?:rice (?:vinegar|wine|paper|bran|malt|flour)|cauliflower rice|konjac|shirataki|zucchini noodles?|zoodles?|egg noodles? free|breadcrumbs?|bread crumbs?|panko|lettuce wraps?|cabbage wraps?|rice paper|almond flour|coconut flour|sugar free|no added sugar)\b/g;
 
 function anySeafood(i: RecipeIngredient) {
   return [...SEAFOOD_SET].some((k) => ingredientHasAllergen(i, k));
@@ -265,6 +265,50 @@ export function exclusionReason(recipe: Recipe, profile: FilterProfile): string 
     }
   }
   return null;
+}
+
+/* ---------- check the label ---------- */
+
+/** Processed foods that often hide gluten (wheat thickeners, rusk, malt). */
+const GLUTEN_RISK = re(
+  "sausages?|snags?|frankfurts?|stock|stocks|broth|bouillon|stock cubes?|stock powder|seasoning|spice mix|rub|curry paste|gravy|oyster sauce|bbq sauce|barbecue sauce|sweet chilli sauce|corn chips|taco shells?|baking powder|icing sugar|custard powder|chocolate|marinade|simmer sauce|pasta sauce|mustard",
+);
+/** Things that are often made with animal products even when they don't say so. */
+const VEGETARIAN_RISK = re("curry paste|stock|stocks|broth|bouillon|stock cubes?|stock powder|gravy|parmesan|parmigiano|pecorino|pesto|seasoning|simmer sauce|caesar dressing|marshmallows?|jelly|kimchi");
+const VEGAN_RISK = re("bread|sourdough|wraps?|tortillas?|naan|pastry|chocolate|margarine|pasta sauce|biscuits?|sugar|brown sugar|wine|corn chips|taco shells?|noodles?");
+
+export interface LabelCheck {
+  /** The ingredient worth checking. */
+  ingredient: string;
+  /** Short reason, e.g. "may contain gluten". */
+  reason: string;
+}
+
+function glutenSensitive(profile: FilterProfile): boolean {
+  return profile.diets.includes("gluten-free") || profile.allergies.some((a) => allergenKeysFor(a).includes("gluten"));
+}
+
+/**
+ * Ingredients this household should check the label of: processed foods that may hide gluten
+ * for gluten-free and coeliac households, or animal products for vegetarians and vegans.
+ * Advisory only: the recipe still shows, with a warning.
+ */
+export function labelChecks(recipe: Recipe, profile: FilterProfile): LabelCheck[] {
+  const out: LabelCheck[] = [];
+  const gluten = glutenSensitive(profile);
+  const vegan = profile.diets.includes("vegan");
+  const veg = vegan || profile.diets.includes("vegetarian");
+  for (const ing of recipe.ingredients) {
+    const t = flat(ing.name);
+    if (gluten && !FIXED_GF.test(t) && !ingredientHasAllergen(ing, "gluten") && GLUTEN_RISK.test(t)) {
+      out.push({ ingredient: ing.name, reason: "may contain gluten" });
+      continue;
+    }
+    if (veg && !/\b(?:vegan|vegetarian|plant based)\b/.test(t) && (VEGETARIAN_RISK.test(t) || (vegan && VEGAN_RISK.test(t)))) {
+      out.push({ ingredient: ing.name, reason: vegan ? "may not be vegan" : "may not be vegetarian" });
+    }
+  }
+  return out;
 }
 
 export function isRecipeAllowed(recipe: Recipe, profile: FilterProfile): boolean {

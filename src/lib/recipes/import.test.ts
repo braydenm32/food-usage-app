@@ -91,13 +91,14 @@ describe("recipeFromHtml", () => {
       title: "Pumpkin soup & toast",
       servings: 4,
       minutes: 45,
-      image: "https://img.example/a.jpg",
       tags: ["soup", "winter"],
       tbspMl: 20,
       source: "saved",
       sourceUrl: "https://www.example.com.au/soup",
     });
     expect(r?.ingredients[0]).toMatchObject({ quantity: 1, unit: "kg", name: "butternut pumpkin", note: "chopped" });
+    // The site's photo isn't kept (it belongs to them).
+    expect(r?.image).toBeUndefined();
     expect(r?.steps).toEqual(["Roast the pumpkin at 200°C (400°F) for 30 minutes.", "Blend with the stock."]);
   });
 
