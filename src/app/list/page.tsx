@@ -16,7 +16,7 @@ import { startReviewSession } from "@/components/add/session";
 import { formatQuantity } from "@/components/pantry/format";
 import { isLikelyNonFood, lineToDraft } from "@/lib/drafts";
 // Swapped for `useHouseholdStaples` from "@/lib/selectors" at merge (see the shim).
-import { useHouseholdStaples } from "./staples-shim";
+import { useHouseholdStaples } from "@/lib/selectors";
 
 /** Walking order through a typical Australian supermarket. */
 const AISLE_ORDER: Aisle[] = [
@@ -33,7 +33,7 @@ const AISLE_ORDER: Aisle[] = [
   "Other",
 ];
 
-const UNITS: Unit[] = ["item", "g", "kg", "ml", "L", "pack", "bunch", "dozen", "loaf", "tin", "jar", "bottle"];
+const UNITS: Unit[] = ["item", "g", "kg", "ml", "L", "pack", "bag", "punnet", "tub", "tray", "bunch", "dozen", "loaf", "tin", "jar", "bottle"];
 const isUnit = (u: string | undefined): u is Unit => !!u && (UNITS as string[]).includes(u);
 
 const REASON_LABEL: Record<NonNullable<ShoppingListItem["reason"]>, string | null> = {

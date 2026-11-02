@@ -1,5 +1,6 @@
 "use client";
 
+import { applyBackupExtras, getBackupExtras } from "@/lib/backup-extras";
 import { useMealLog } from "@/lib/nutrition/meal-log";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -271,6 +272,7 @@ function exportSnapshot() {
       shoppingList: s.shoppingList,
       mealPlan: s.mealPlan,
     },
+    extras: getBackupExtras(),
   };
 }
 
@@ -302,7 +304,7 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [confirmErase, setConfirmErase] = useState(false);
   /** A parsed backup waiting for "Replace" to be confirmed. */
-  const [pendingImport, setPendingImport] = useState<{ data: z.infer<typeof importSchema>; exportedAt?: string } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ data: z.infer<typeof importSchema>; exportedAt?: string; extras?: unknown } | null>(null);
   const hasAccount = useSyncStatus((s) => Boolean(s.userId && s.householdId));
   /** Reminders can arrive with Larder closed: push set up here, an account in a household, and a browser that can. */
   const background = backgroundPushConfigured && hasAccount && (typeof window === "undefined" || browserSupportsPush());
@@ -416,7 +418,8 @@ export default function SettingsPage() {
           ? (raw as { exportedAt: string }).exportedAt
           : undefined;
       // Nothing changes until "Replace" is confirmed.
-      setPendingImport({ data: parsed.data, exportedAt });
+      const extras = raw && typeof raw === "object" && "extras" in raw ? (raw as { extras: unknown }).extras : undefined;
+      setPendingImport({ data: parsed.data, exportedAt, extras });
     } catch {
       toast("Couldn't read that file. It should be a .json export from Larder.", { tone: "error" });
     }
@@ -430,6 +433,7 @@ export default function SettingsPage() {
     // normalisePersisted keeps the built-in spots, fills missing arrays (diets, allergies…) and
     // merges settings and profile over the defaults, the same as the store's own migrate.
     useLarder.setState({ ...normalisePersisted({ ...d, settings: { ...settings, ...imported } }), undo: null });
+    if (pendingImport.extras !== undefined) applyBackupExtras(pendingImport.extras);
     setPendingImport(null);
     toast(`Restored ${d.items.length} item${d.items.length === 1 ? "" : "s"} and your settings`);
   };

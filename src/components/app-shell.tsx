@@ -26,7 +26,7 @@ const TABS = [
  */
 const RAIL_EXTRAS = [
   { href: "/plan", label: "Plan", Icon: CalendarDays, planner: true, also: [] as string[] },
-  { href: "/insights", label: "Your kitchen", Icon: ChefHat, planner: false, also: ["/nutrition"] },
+  { href: "/kitchen", label: "Your kitchen", Icon: ChefHat, planner: false, also: ["/insights", "/nutrition"] },
 ] as const;
 
 function isActive(pathname: string, href: string) {

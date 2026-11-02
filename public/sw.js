@@ -1,8 +1,8 @@
 // Larder service worker: offline shell + notifications (background reminders arrive here as pushes).
 // Bump the version when the caching rules or shell change; old caches are deleted on activate.
-const VERSION = 5;
+const VERSION = 6;
 const CACHE = `larder-v${VERSION}`;
-const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/nutrition", "/welcome", "/account"];
+const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/nutrition", "/kitchen", "/welcome", "/account"];
 
 /** Only cache complete, same-origin successes (no errors, redirects or opaque responses). */
 const cacheable = (res) => res && res.ok && res.type === "basic";

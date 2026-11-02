@@ -313,7 +313,7 @@ export function ReviewList({
       )}
 
       {/* Solid footer that sits just above the tab bar (and clears the raised Add button). */}
-      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 mt-6 border-t border-line bg-paper px-5 pb-8 pt-3 lg:bottom-0 lg:-mx-2 lg:px-2 lg:pb-6">
+      <div data-toast-avoid className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 mt-6 border-t border-line bg-paper px-5 pb-8 pt-3 lg:bottom-0 lg:-mx-2 lg:px-2 lg:pb-6">
         <Button size="lg" block disabled={included.length === 0 || submitting} onClick={submit}>
           {included.length === 0 ? "Tick something to add" : `Add ${addCount} ${addCount === 1 ? "item" : "items"}`}
         </Button>

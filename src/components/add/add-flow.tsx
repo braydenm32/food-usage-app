@@ -1,5 +1,6 @@
 "use client";
 
+import { askForReminders } from "@/lib/push/client";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
@@ -282,6 +283,12 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
           ? `Added ${n} ${n === 1 ? "item" : "items"} to your larder`
           : `Added ${n} ${n === 1 ? "item" : "items"}, topped up ${m}`;
     toast(message, { undoable: true });
+    if (firstEver && !useLarder.getState().settings.pushEnabled) {
+      // Ask for reminders at the moment they make sense, from a tap (browsers need a user gesture).
+      toast("Want a heads-up when something needs eating?", {
+        action: { label: "Remind me", onClick: () => void askForReminders({ once: true }) },
+      });
+    }
     clear();
     router.push(firstEver ? "/" : "/pantry");
   }
