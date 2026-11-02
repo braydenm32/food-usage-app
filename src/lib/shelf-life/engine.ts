@@ -7,7 +7,7 @@ type StorageKind = StorageLocation["kind"];
 /** Fallback days when an item has no matched food type (see `unknownDays`). */
 const FALLBACK_DAYS = { pantry: 30, fridge: 5, freezer: 90 } as const;
 /** Unknown raw meat or seafood: assume the shortest common fridge life. */
-const HIGH_RISK_DAYS = 2;
+const HIGH_RISK_DAYS = 3;
 /** Freezer life used for foods whose table says "not recommended frozen". */
 export const FREEZER_NOT_RECOMMENDED_DAYS = 30;
 

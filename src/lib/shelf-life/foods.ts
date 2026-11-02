@@ -14,12 +14,24 @@ const NOISE = new Set([
   "ww", "woolworths", "coles", "aldi", "iga", "essentials", "homebrand", "macro", "organic", "fresh", "free", "range",
   "australian", "aus", "pk", "pack", "pkt", "ea", "each", "kg", "g", "ml", "l", "lt", "x", "the", "of", "and", "with",
   "brand", "select", "finest", "own", "prepack", "loose", "per", "large", "small", "medium", "lge", "sml", "med",
+  "btl", "ctn", "ltr", "litre", "litres",
 ]);
 
+/**
+ * Sugar claims on a label. "No added sugar" says nothing about which food it is, so it goes;
+ * "no sugar" / "sugar free" marks a diet product, so it becomes "zero" ("Coke No Sugar" → "coke zero").
+ * Without this, the word "sugar" pulls these lines towards the sugar food.
+ */
+const SUGAR_CLAIMS: [RegExp, string][] = [
+  [/\b(?:no|less|low|reduced|lite)\s+added\s+sugars?\b|\bno\s+sugars?\s+added\b|\b(?:less|low|reduced|lite)\s+sugars?\b/g, " "],
+  [/\b(?:no|zero)\s+sugars?\b|\bsugar\s*-?\s*free\b|\b0\s*sugar\b/g, " zero "],
+];
+
 export function normalise(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[0-9]+(\.[0-9]+)?\s*(kg|g|ml|l|lt|pk|pack|x)\b/g, " ")
+  let t = text.toLowerCase();
+  for (const [re, sub] of SUGAR_CLAIMS) t = t.replace(re, sub);
+  return t
+    .replace(/[0-9]+(\.[0-9]+)?\s*(kg|g|gms?|ml|l|lt|ltr|litres?|pk|pack|x)\b/g, " ")
     .replace(/[^a-z\s]/g, " ")
     .split(/\s+/)
     .filter((w) => w.length > 1 && !NOISE.has(w))
@@ -35,6 +47,15 @@ function singular(w: string): string {
   return w;
 }
 
+function termWords(text: string): string[] {
+  return normalise(text).split(" ").filter(Boolean).map(singular);
+}
+
+/** The form a name or alias takes inside the matcher. Two foods sharing a key would compete for the same text. */
+export function termKey(text: string): string {
+  return termWords(text).join(" ");
+}
+
 interface Indexed {
   food: FoodType;
   terms: string[][]; // each alias as singular words
@@ -42,7 +63,7 @@ interface Indexed {
 
 const INDEX: Indexed[] = FOOD_TYPES.map((food) => ({
   food,
-  terms: [food.name, ...food.aliases].map((t) => normalise(t).split(" ").filter(Boolean).map(singular)),
+  terms: [food.name, ...food.aliases].map(termWords),
 }));
 
 export interface FoodMatch {
@@ -56,7 +77,7 @@ export interface FoodMatch {
  * to a food type. Returns undefined when nothing plausible matches.
  */
 export function matchFoodType(text: string): FoodMatch | undefined {
-  const words = normalise(text).split(" ").filter(Boolean).map(singular);
+  const words = termWords(text);
   if (words.length === 0) return undefined;
   const joined = words.join(" ");
   let best: FoodMatch | undefined;

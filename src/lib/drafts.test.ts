@@ -151,6 +151,13 @@ describe("isLikelyNonFood", () => {
   it("leaves food alone", () => {
     for (const t of ["Full cream milk 2L", "Baby spinach 120g", "Bread rolls"]) expect(isLikelyNonFood(t), t).toBe(false);
   });
+
+  it("does not flag foods whose names contain a non-food word", () => {
+    for (const t of ["Lipton tea bags 100pk", "Bag of ice 5kg", "Lolly bag", "Steam bag potatoes", "Sponge cake", "Zucchini flowers"]) {
+      expect(isLikelyNonFood(t), t).toBe(false);
+    }
+    for (const t of ["Reusable bag", "Kitchen sponge 3pk", "Flowers bunch"]) expect(isLikelyNonFood(t), t).toBe(true);
+  });
 });
 
 describe("parseLocalList", () => {
@@ -319,7 +326,7 @@ describe("parser fixes from review", () => {
   it("puts unknown raw meat in the fridge with a short use-by", () => {
     const d = lineToDraft(parseLine("venison sausages 500g")!);
     expect(d).toMatchObject({ foodTypeId: null, locationId: "fridge", dateKind: "use-by", quantity: 500, unit: "g" });
-    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 2 });
+    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 3 });
     // Other unknown foods also go to the fridge, but with a gentler estimate.
     expect(lineToDraft({ name: "Dragon fruit jam" })).toMatchObject({ locationId: "fridge", dateKind: "best-before" });
   });
