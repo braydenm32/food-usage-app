@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ingredientGrams, matchFood, recipeNutrition, topContributors, type FoodComposition } from "./engine";
+import { hasFoodData, ingredientGrams, matchFood, recipeNutrition, topContributors, type FoodComposition } from "./engine";
 import { contributorsFor, dailyAverage, mealsCsv, quickAddText, targetState, totalsFor, type MealEntry } from "./meal-log";
 import { NUTRIENT, addNutrients, kcal, scaleNutrients } from "./nutrients";
 import type { Recipe } from "@/lib/types";
@@ -57,63 +57,52 @@ describe("ingredientGrams", () => {
   });
 });
 
-const AFCD_LIKE: FoodComposition[] = [
-  "Milk, goat, fluid",
-  "Milk, cow, fluid, regular fat (~3.5%)",
-  "Onion, spring, raw",
-  "Onion, brown, peeled, raw",
-  "Sugar, brown",
-  "Sugar, white, granulated or caster",
-  "Cheese, parmesan",
-  "Cheese, cream, plain",
-  "Butter, plain, salted",
-  "Bean, butter, canned, drained",
-  "Grape, red, raw",
-  "Wine, red",
-  "Stock, chicken, liquid",
-  "Stock, vegetable, liquid",
-  "Olive, green, in brine",
-  "Apple, red skin, unpeeled, raw",
-  "Egg, chicken, white (albumen), raw",
-  "Egg, chicken, whole, raw",
-  "Noodle, egg, dry",
-  "Garlic, peeled, raw",
-  "Chicken, thigh, lean flesh, raw",
-  "Eggplant, peeled, raw",
-  "Tomato, canned, whole, no added salt",
-].map((name, i) => ({ key: `F${i}`, name, n: { energyKj: 100 } }));
-const nameOf = (ing: string) => matchFood(ing, AFCD_LIKE)?.name ?? null;
+// Against the real bundled AFCD Release 3 data.
+const real = (ing: string) => matchFood(ing)?.name ?? null;
 
-describe("matchFood on AFCD-style names", () => {
+describe("matchFood on the real food database", () => {
+  it("has the database bundled", () => {
+    expect(hasFoodData()).toBe(true);
+  });
   it.each([
     ["milk", "Milk, cow, fluid, regular fat (~3.5%)"],
     ["whole milk", "Milk, cow, fluid, regular fat (~3.5%)"],
-    ["onion", "Onion, brown, peeled, raw"],
-    ["spring onions", "Onion, spring, raw"],
-    ["caster sugar", "Sugar, white, granulated or caster"],
+    ["onion", "Onion, mature, brown skinned, peeled, raw"],
+    ["brown onion, diced", "Onion, mature, brown skinned, peeled, raw"],
+    ["spring onions", "Onion, spring, fresh, raw"],
+    ["caster sugar", "Sugar, white, granulated or lump"],
     ["brown sugar", "Sugar, brown"],
     ["cream cheese", "Cheese, cream, plain"],
-    ["butter beans", "Bean, butter, canned, drained"],
+    ["sour cream", "Cream, sour, regular fat"],
+    ["cream", "Cream, thickened, regular fat (~35%)"],
     ["butter", "Butter, plain, salted"],
     ["red wine", "Wine, red"],
-    ["vegetable stock", "Stock, vegetable, liquid"],
-    ["olives", "Olive, green, in brine"],
-    ["apples", "Apple, red skin, unpeeled, raw"],
+    ["vegetable stock", "Stock, liquid, all flavours (except fish), prepared from commercial powder or cube"],
+    ["olives", "Olive, green or black, drained"],
     ["egg whites", "Egg, chicken, white (albumen), raw"],
     ["eggs", "Egg, chicken, whole, raw"],
-    ["egg noodles", "Noodle, egg, dry"],
-    ["garlic cloves, crushed", "Garlic, peeled, raw"],
+    ["garlic cloves, crushed", "Garlic, peeled, fresh, raw"],
+    ["minced garlic", "Garlic, peeled, fresh, raw"],
     ["chicken thighs, skin off", "Chicken, thigh, lean flesh, raw"],
     ["boneless chicken thighs", "Chicken, thigh, lean flesh, raw"],
-    ["tinned tomatoes", "Tomato, canned, whole, no added salt"],
-    ["minced garlic", "Garlic, peeled, raw"],
-    ["aubergine", "Eggplant, peeled, raw"],
+    ["tinned tomatoes", "Tomato, whole, canned in tomato juice, undrained"],
+    ["spaghetti", "Pasta, white wheat flour, dry"],
+    ["pasta sauce", "Sauce, pasta, tomato-based, commercial, heated"],
+    ["tasty cheese", "Cheese, cheddar, natural, regular fat"],
+    ["cooked rice", "Rice, white, boiled or rice cooker, no added salt"],
+    ["rice", "Rice, white, uncooked"],
+    ["greek yoghurt", "Yoghurt, natural, regular fat (~3%)"],
+    ["carrot", "Carrot, mature, peeled, fresh, raw"],
+    ["olive oil", "Oil, olive"],
+    ["salt", "Salt, table, iodised"],
+    ["plain flour", "Flour, wheat, white, plain"],
+    ["aubergine", "Eggplant, unpeeled, fresh, raw"],
   ])("%s → %s", (ing, food) => {
-    expect(nameOf(ing)).toBe(food);
+    expect(real(ing)).toBe(food);
   });
   it("doesn't guess from one shared word", () => {
-    expect(nameOf("red capsicum")).toBeNull();
-    expect(nameOf("sour cream")).toBeNull();
+    expect(real("unicorn tears")).toBeNull();
+    expect(real("butter chicken spice") ?? "").not.toMatch(/^Butter,/);
   });
 });
 

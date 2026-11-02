@@ -5,6 +5,7 @@
 // Download the file from:
 // https://www.foodstandards.gov.au/science-data/food-nutrient-databases/afcd/australian-food-composition-database-download-excel-files
 // No dependencies: reads the .xlsx (a zip of XML files) directly.
+// Source: Food Standards Australia New Zealand, Australian Food Composition Database – Release 3 (per 100 g sheet).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
@@ -69,10 +70,25 @@ if (!file) {
 }
 const zip = unzip(readFileSync(file));
 const strings = sharedStrings(zip.get("xl/sharedStrings.xml")?.toString("utf8"));
-const sheetName = [...zip.keys()].filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).sort()[0];
-const table = rows(zip.get(sheetName)!.toString("utf8"), strings);
-
-const headerAt = table.findIndex((r) => r.some((c) => /^food name$/i.test((c ?? "").trim())));
+// The workbook has a contents sheet, then "per 100 g" (all foods), then "per 100 mL" (liquids).
+// Use the first sheet in workbook order that has a "Food Name" header row: the per 100 g one.
+const sheets = [...zip.keys()]
+  .filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/.test(k))
+  .sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]));
+// The contents sheet lists "Food name" as a field too, so the header row must also have the key and nutrient columns.
+const isHeader = (r: string[]) =>
+  r.some((c) => /^food name$/i.test((c ?? "").trim())) && r.some((c) => /^public food key$/i.test((c ?? "").trim())) && r.filter(Boolean).length > 10;
+let table: string[][] = [];
+let headerAt = -1;
+for (const name of sheets) {
+  const t = rows(zip.get(name)!.toString("utf8"), strings);
+  const at = t.findIndex(isHeader);
+  if (at >= 0) {
+    table = t;
+    headerAt = at;
+    break;
+  }
+}
 if (headerAt < 0) throw new Error("Couldn't find the 'Food Name' header row");
 const header = table[headerAt].map((h) => (h ?? "").replace(/\s+/g, " ").trim());
 const keyCol = header.findIndex((h) => /public food key/i.test(h));
