@@ -66,7 +66,7 @@ export function ItemRow({
   return (
     <li
       className={cx(
-        "flex flex-wrap items-center justify-end gap-x-1 rounded-2xl pr-1 transition-colors hover:bg-surface-2/60",
+        "flex flex-wrap items-center justify-end gap-x-1 pr-1 transition-colors hover:bg-surface-2/60",
         selection?.selected && "bg-primary-soft hover:bg-primary-soft",
         className,
       )}
@@ -142,7 +142,7 @@ export function ItemRow({
                 .map((part, i) => (
                   <span
                     key={i}
-                    className="whitespace-nowrap before:inline-block before:w-3 before:text-center before:text-ink-3 before:content-['·']"
+                    className={cx(i === 0 ? "min-w-0" : "whitespace-nowrap", "before:inline-block before:w-3 before:text-center before:text-ink-3 before:content-['·']")}
                   >
                     {part}
                   </span>

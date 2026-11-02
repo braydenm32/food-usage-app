@@ -423,7 +423,7 @@ function SelectBar({
       data-toast-avoid
       role="region"
       aria-label="Selected items"
-      className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-20 -mx-2 mt-4 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-line bg-surface p-2 shadow-card lg:bottom-4"
+      className="sticky bottom-[calc(6rem+env(safe-area-inset-bottom))] z-20 -mx-2 mt-4 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-line bg-surface p-2 shadow-card lg:bottom-4"
     >
       <p className="min-w-0 flex-1 basis-28 px-2 text-sm font-semibold text-ink" aria-live="polite">
         {n === 0 ? "Tap items to select" : `${n} selected`}
