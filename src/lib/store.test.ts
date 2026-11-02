@@ -209,3 +209,31 @@ describe("addToList merging", () => {
     expect(s().shoppingList[0].quantity).toBe(500);
   });
 });
+
+describe("addItems: amounts, packs and barcodes", () => {
+  it("never adds a zero amount", () => {
+    const created = s().addItems([draft({ quantity: 0 }), draft({ name: "B", quantity: 1 })], "manual");
+    expect(created.map((i) => i.name)).toEqual(["B"]);
+  });
+
+  it("adds each pack of a multi-pack line as its own item, sharing the price", () => {
+    const created = s().addItems([draft({ quantity: 2, unit: "L", packs: 2, price: 6.2 })], "list");
+    expect(created).toHaveLength(2);
+    expect(created.every((i) => i.quantity === 2 && i.unit === "L" && i.price === 3.1)).toBe(true);
+  });
+
+  it("saves the barcode on the item and remembers it for next time", () => {
+    const [item] = s().addItems([draft({ barcode: "9300633000000", name: "Full cream milk", quantity: 2 })], "barcode");
+    expect(item.barcode).toBe("9300633000000");
+    expect(s().barcodes["9300633000000"]).toMatchObject({ foodTypeId: "milk-full-cream", name: "Full cream milk", unit: "L", quantity: 2 });
+    // An unmatched placeholder isn't remembered.
+    s().addItems([draft({ barcode: "123", name: "Barcode 123", foodTypeId: null })], "barcode");
+    expect(s().barcodes["123"]).toBeUndefined();
+  });
+
+  it("keeps remembered barcodes through a save and load", () => {
+    s().rememberBarcode("42", { foodTypeId: null, name: "Nana's relish", emoji: "🫙", unit: "jar", quantity: 1 });
+    expect(normalisePersisted({ barcodes: s().barcodes }).barcodes["42"]).toMatchObject({ name: "Nana's relish" });
+    expect(normalisePersisted({}).barcodes).toEqual({});
+  });
+});

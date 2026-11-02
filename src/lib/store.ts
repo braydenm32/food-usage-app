@@ -5,6 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { addAmounts } from "@/lib/recipes/quantity";
 import type {
   Aisle,
+  BarcodeMemory,
   DraftItem,
   FoodCategory,
   FoodType,
@@ -165,6 +166,8 @@ export interface LarderState {
   savedRecipes: Recipe[];
   shoppingList: ShoppingListItem[];
   mealPlan: MealPlanEntry[];
+  /** Barcode → what this household said it is, checked before any network lookup. */
+  barcodes: Record<string, BarcodeMemory>;
   /** Not persisted: last undoable action. Toasts read `undo.id` when shown. */
   undo: UndoSnapshot | null;
 
@@ -181,6 +184,8 @@ export interface LarderState {
       merge?: { itemId: string; quantity: number; price?: number }[];
     },
   ) => PantryItem[];
+  /** Remember what a barcode is (set automatically when a scanned line is added). */
+  rememberBarcode: (code: string, memo: Omit<BarcodeMemory, "at">) => void;
   updateItem: (id: string, patch: Partial<PantryItem>) => void;
   openItem: (id: string) => void;
   /** Move an item. With `quantity` less than what's there, only that much moves, as a new item. */
@@ -249,6 +254,7 @@ const initialData = () => ({
   savedRecipes: [] as Recipe[],
   shoppingList: [] as ShoppingListItem[],
   mealPlan: [] as MealPlanEntry[],
+  barcodes: {} as Record<string, BarcodeMemory>,
 });
 
 const STORAGE_KEY = "larder-v1";
@@ -316,6 +322,7 @@ export function normalisePersisted(raw: unknown): PersistedData {
     savedRecipes: arr<Recipe>(p.savedRecipes),
     shoppingList: arr<ShoppingListItem>(p.shoppingList),
     mealPlan: arr<MealPlanEntry>(p.mealPlan),
+    barcodes: obj(p.barcodes) as Record<string, BarcodeMemory>,
   };
 }
 
@@ -376,7 +383,14 @@ export const useLarder = create<LarderState>()(
           const { locations } = get();
           const today = startOfDay(new Date());
           const created: PantryItem[] = drafts
-            .filter((d) => d.include)
+            // A zero or invalid amount is never stock.
+            .filter((d) => d.include && Number.isFinite(d.quantity) && d.quantity > 0)
+            // "2x milk 2L" arrives as one line of 2 packs: each pack is its own item, opened on its own.
+            .flatMap((d) => {
+              const packs = d.packs && Number.isInteger(d.packs) && d.packs > 1 ? Math.min(d.packs, 24) : 1;
+              const price = d.price !== undefined && packs > 1 ? Math.round((d.price * 100) / packs) / 100 : d.price;
+              return Array.from({ length: packs }, () => ({ ...d, price }));
+            })
             .map((d) => {
               const frozen = locations.find((l) => l.id === d.locationId)?.kind === "freezer";
               return {
@@ -396,8 +410,22 @@ export const useLarder = create<LarderState>()(
                 expiredWhenFrozen:
                   frozen && d.printedDate && d.dateKind === "use-by" && parseLocalDate(d.printedDate) < today ? true : undefined,
                 source,
+                ...(d.barcode ? { barcode: d.barcode } : {}),
               };
             });
+          // Remember what each scanned barcode turned out to be, so the next scan needs no lookup.
+          const scanned = drafts.filter((d) => d.include && d.barcode && d.quantity > 0 && !d.name.startsWith("Barcode "));
+          if (scanned.length) {
+            const at = nowISO();
+            set((s) => ({
+              barcodes: {
+                ...s.barcodes,
+                ...Object.fromEntries(
+                  scanned.map((d) => [d.barcode!, { foodTypeId: d.foodTypeId, name: d.name, emoji: d.emoji, unit: d.unit, quantity: d.quantity, at }]),
+                ),
+              },
+            }));
+          }
           const removeIds = new Set(opts?.removeListIds ?? []);
           const merges = new Map((opts?.merge ?? []).filter((m) => m.quantity > 0).map((m) => [m.itemId, m]));
           const total = created.length + merges.size;
@@ -437,6 +465,9 @@ export const useLarder = create<LarderState>()(
           });
           return created;
         },
+
+        rememberBarcode: (code, memo) =>
+          set((s) => ({ barcodes: { ...s.barcodes, [code]: { ...memo, at: nowISO() } } })),
 
         updateItem: (id, patch) =>
           set((s) => ({
