@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 /**
- * Guards the AI-backed API routes against abuse: same-origin only, a body-size cap, and a
+ * Guards the AI-backed API routes (and the test reminder) against abuse: same-origin only, a body-size cap, and a
  * simple per-IP rate limit (20 requests a minute). The limiter lives in this instance's
  * memory, so it is a speed bump rather than a hard quota on multi-instance hosting.
  */
@@ -14,6 +14,7 @@ const MAX_BODY: Record<string, number> = {
   // More specific paths first: routeKey takes the first prefix match.
   "/api/recipes/import": 9 * 1024 * 1024, // recipe photo, or a small JSON body with a link
   "/api/recipes": 64 * 1024,
+  "/api/push/test": 4 * 1024, // { endpoint }
 };
 
 const hits = new Map<string, number[]>();
@@ -84,5 +85,5 @@ export function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/scan/:path*", "/api/parse-text/:path*", "/api/recipes/:path*", "/api/barcode/:path*"],
+  matcher: ["/api/scan/:path*", "/api/parse-text/:path*", "/api/recipes/:path*", "/api/barcode/:path*", "/api/push/test"],
 };

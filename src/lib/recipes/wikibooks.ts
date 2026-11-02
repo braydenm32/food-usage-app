@@ -1,5 +1,6 @@
 import type { Recipe } from "@/lib/types";
 import { finishImport, parseIngredientLine } from "@/lib/recipes/import";
+import { localiseText } from "@/lib/recipes/map";
 
 /**
  * Turns a Wikibooks Cookbook page (wikitext) into a Larder recipe.
@@ -193,7 +194,8 @@ export function recipeFromWikibooks(page: { title: string; wikitext: string; url
   const fields = recipeSummaryFields(wikitext);
   const title = page.title.replace(/^cookbook:/i, "").trim();
   const url = page.url ?? wikibooksUrl(page.title);
-  const servings = Number(cleanWikitext(fields.servings ?? fields.yield ?? "").match(/\d+/)?.[0]) || 4;
+  const statedServings = Number(cleanWikitext(fields.servings ?? fields.yield ?? "").match(/\d+/)?.[0]);
+  const servings = statedServings || 4;
 
   // The intro paragraph(s) before the first heading, minus the template lines.
   const intro = all[0].lines
@@ -207,8 +209,8 @@ export function recipeFromWikibooks(page: { title: string; wikitext: string; url
     summary: intro ? intro.slice(0, 280) : undefined,
     servings,
     minutes: wikiMinutes(fields.time ?? fields["total time"]),
-    ingredients: ingLines.map(parseIngredientLine).filter((i) => i.name),
-    steps,
+    ingredients: ingLines.map((l) => parseIngredientLine(localiseText(l))).filter((i) => i.name),
+    steps: steps.map(localiseText),
     tags: tagsFrom(wikitext, fields.category),
     sourceUrl: url,
     tbspMl: 15,
@@ -217,6 +219,7 @@ export function recipeFromWikibooks(page: { title: string; wikitext: string; url
     ...recipe,
     id: wikibooksId(page.title),
     source: "database",
+    ...(statedServings ? {} : { servingsEstimated: true }),
     credit: {
       name: "Wikibooks Cookbook",
       url,

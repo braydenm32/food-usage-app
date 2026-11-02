@@ -5,8 +5,9 @@ import { AppShell } from "@/components/app-shell";
 import { AppErrorBoundary } from "@/components/app-error-boundary";
 import "./globals.css";
 
-const figtree = Figtree({ variable: "--font-figtree", subsets: ["latin"] });
-const youngSerif = Young_Serif({ variable: "--font-young-serif", subsets: ["latin"], weight: "400" });
+// display: swap + fallback metrics keep text visible on first paint. Both families are used above the fold.
+const figtree = Figtree({ variable: "--font-figtree", subsets: ["latin"], display: "swap" });
+const youngSerif = Young_Serif({ variable: "--font-young-serif", subsets: ["latin"], weight: "400", display: "swap" });
 
 export const metadata: Metadata = {
   title: { default: "Larder", template: "%s · Larder" },
@@ -20,6 +21,7 @@ export const viewport: Viewport = {
     { media: "(prefers-color-scheme: light)", color: "#f2f4ee" },
     { media: "(prefers-color-scheme: dark)", color: "#121815" },
   ],
+  colorScheme: "light dark",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",

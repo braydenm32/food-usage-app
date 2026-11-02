@@ -8,12 +8,16 @@
 */
 
 @custom-variant dark (&:where(.dark, .dark *));
+/* Landscape phones and other short viewports. */
+@custom-variant short (@media (max-height: 500px));
 
 :root {
   --paper: #f2f4ee;
   --surface: #fbfcf8;
   --surface-2: #e8ece2;
   --line: #c8d0c0;
+  /* Borders of interactive controls: >= 3:1 against paper and surface (WCAG 1.4.11). --line is for dividers only. */
+  --control-line: #7f8b81;
   --ink: #1b2620;
   --ink-2: #4c5a52;
   --ink-3: #5f6b63;
@@ -39,10 +43,11 @@
   --surface: #19211d;
   --surface-2: #222c27;
   --line: #2f3a34;
+  --control-line: #5f6e65;
   --ink: #e6ece4;
   --ink-2: #b3bfb6;
   --ink-3: #8c9990;
-  --primary: #6fae92;
+  --primary: #5a9a7e;
   --primary-ink: #0f1a15;
   --primary-soft: #23382f;
   --fresh: #8fcf7f;
@@ -54,7 +59,7 @@
   --spoiled: #f08aa9;
   --spoiled-soft: #3e1d29;
   --on-status: #1a0f12;
-  --focus: #6fae92;
+  --focus: #7fbf9f;
   --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 10px 30px -14px rgb(0 0 0 / 0.6);
 }
 
@@ -63,6 +68,7 @@
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-line: var(--line);
+  --color-control-line: var(--control-line);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
   --color-ink-3: var(--ink-3);
@@ -87,6 +93,8 @@
 html {
   -webkit-tap-highlight-color: transparent;
   color-scheme: light;
+  /* Focus-scroll (and scrollIntoView) clears the fixed tab bar. */
+  scroll-padding-bottom: calc(6rem + env(safe-area-inset-bottom));
 }
 html.dark {
   color-scheme: dark;
@@ -179,4 +187,28 @@ body {
 }
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* Numbers that should read as figures: Figtree semibold, tabular. */
+.stat-num {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+/* Shared page column: every screen uses the same left edge on desktop. */
+.page-container {
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+}
+
+/* Bottom tab bar glass; no drop shadow in dark. */
+.tabbar-surface {
+  box-shadow: 0 -6px 20px -12px rgb(0 0 0 / 0.25);
+}
+.dark .tabbar-surface {
+  box-shadow: none;
 }

@@ -131,6 +131,7 @@ export function hasLocalData(state: SyncedState): boolean {
     state.shoppingList.length > 0 ||
     state.savedRecipes.length > 0 ||
     state.mealPlan.length > 0 ||
+    state.staples.length > 0 ||
     state.events.length > 0
   );
 }

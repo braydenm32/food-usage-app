@@ -14,7 +14,9 @@ import { toast } from "@/components/toast";
 import { useRouter } from "next/navigation";
 import { startReviewSession } from "@/components/add/session";
 import { formatQuantity } from "@/components/pantry/format";
-import { lineToDraft } from "@/lib/drafts";
+import { isLikelyNonFood, lineToDraft } from "@/lib/drafts";
+// Swapped for `useHouseholdStaples` from "@/lib/selectors" at merge (see the shim).
+import { useHouseholdStaples } from "@/lib/selectors";
 
 /** Walking order through a typical Australian supermarket. */
 const AISLE_ORDER: Aisle[] = [
@@ -31,7 +33,7 @@ const AISLE_ORDER: Aisle[] = [
   "Other",
 ];
 
-const UNITS: Unit[] = ["item", "g", "kg", "ml", "L", "pack", "bunch", "dozen", "loaf", "tin", "jar", "bottle"];
+const UNITS: Unit[] = ["item", "g", "kg", "ml", "L", "pack", "bag", "punnet", "tub", "tray", "bunch", "dozen", "loaf", "tin", "jar", "bottle"];
 const isUnit = (u: string | undefined): u is Unit => !!u && (UNITS as string[]).includes(u);
 
 const REASON_LABEL: Record<NonNullable<ShoppingListItem["reason"]>, string | null> = {
@@ -40,6 +42,23 @@ const REASON_LABEL: Record<NonNullable<ShoppingListItem["reason"]>, string | nul
   staple: "staple",
   plan: "for this week's meals",
 };
+
+/** Toiletries go to Health & Beauty; cleaning, paper and the rest to Household. */
+const HEALTH_BEAUTY =
+  /\b(shampoo|conditioner|body ?wash|soap|deodorant|toothpaste|toothbrush|floss|razor|sunscreen|moisturiser|panadol|nurofen|paracetamol|ibuprofen|band-?aids?|plasters?|tampons?|pads|napp(y|ies))\b/i;
+
+function nonFoodAisle(name: string): Aisle {
+  return HEALTH_BEAUTY.test(name) ? "Health & Beauty" : "Household";
+}
+
+/**
+ * Non-food on the list (toilet paper, dish liquid). These live in their own "Household"
+ * section, are never put in the larder and never get a date: ticking one just clears it.
+ */
+function isHouseholdItem(l: Pick<ShoppingListItem, "aisle" | "foodTypeId" | "name">): boolean {
+  if (l.foodTypeId) return false;
+  return l.aisle === "Household" || l.aisle === "Health & Beauty" || isLikelyNonFood(l.name);
+}
 
 function groupByAisle(items: ShoppingListItem[]): Array<{ aisle: Aisle; items: ShoppingListItem[] }> {
   const groups = new Map<Aisle, ShoppingListItem[]>();
@@ -98,7 +117,14 @@ export default function ListPage() {
 
   const open = useMemo(() => list.filter((l) => !l.checked), [list]);
   const ticked = useMemo(() => list.filter((l) => l.checked), [list]);
-  const groups = useMemo(() => groupByAisle(open), [open]);
+  /** Ticked food: what "Put in the larder" takes. Ticked non-food just comes off the list with it. */
+  const tickedFood = useMemo(() => ticked.filter((l) => !isHouseholdItem(l)), [ticked]);
+  const groups = useMemo(() => groupByAisle(open.filter((l) => !isHouseholdItem(l))), [open]);
+  const householdRows = useMemo(
+    () => open.filter(isHouseholdItem).sort((a, b) => a.name.localeCompare(b.name)),
+    [open],
+  );
+  const staples = useHouseholdStaples();
   const locations = useLarder((s) => s.locations);
   /** Larder stock per food type (and per name for unmatched items), for the "Already have" hint. */
   const haveFor = useMemo(() => {
@@ -119,6 +145,16 @@ export default function ListPage() {
     const onListNames = new Set(open.map((l) => l.name.toLowerCase()));
     const out: Array<{ key: string; name: string; food?: FoodType; why: "ran-out" | "low" | "often" | "staple" }> = [];
     const seen = new Set<string>();
+
+    // The household's own staples that have run out or are running low.
+    for (const v of staples) {
+      const key = v.staple.foodTypeId ?? v.staple.name.toLowerCase();
+      if (v.onList || seen.has(key) || (v.inStock && !v.low)) continue;
+      if (v.staple.foodTypeId ? onList.has(v.staple.foodTypeId) : onListNames.has(key)) continue;
+      seen.add(key);
+      const food = getFoodType(v.staple.foodTypeId);
+      out.push({ key, name: food?.name ?? v.staple.name, food, why: v.inStock ? "low" : "staple" });
+    }
 
     // Running low: a quarter or less left of something we don't have a fuller one of.
     for (const i of items) {
@@ -158,18 +194,22 @@ export default function ListPage() {
       seen.add(id);
       out.push({ key: id, name: food.name, food, why: "often" });
     }
-    for (const f of FOOD_TYPES) {
-      if (!f.staple || seen.has(f.id) || inLarder.has(f.id) || onList.has(f.id)) continue;
-      seen.add(f.id);
-      out.push({ key: f.id, name: f.name, food: f, why: "staple" });
-    }
     return out.slice(0, 10);
-  }, [items, events, open, openedAt]);
+  }, [items, events, open, openedAt, staples]);
 
-  const addFood = (food: FoodType, quantity?: number, name?: string) => {
+  /** A brand-new household gets generic ideas; once it has history (or its own staples) they go. */
+  const hasHistory = items.length > 0 || staples.length > 0 || events.some((e) => e.type === "added");
+  const commonStaples = useMemo(() => {
+    if (hasHistory) return [];
+    const onList = new Set(list.map((l) => l.foodTypeId).filter(Boolean));
+    return FOOD_TYPES.filter((f) => f.staple && !onList.has(f.id)).slice(0, 10);
+  }, [hasHistory, list]);
+
+  /** Typed adds show up on the list right away, so they don't need a toast over it. */
+  const addFood = (food: FoodType, quantity?: number) => {
     addToList([
       {
-        name: name ?? food.name,
+        name: food.name,
         foodTypeId: food.id,
         aisle: food.aisle,
         quantity: quantity ?? food.defaultQuantity,
@@ -177,24 +217,38 @@ export default function ListPage() {
         reason: "manual",
       },
     ]);
-    toast(`Added ${name ?? food.name}`);
   };
 
   const addFreeText = (raw: string) => {
     const { quantity, text } = parseQuickAdd(raw);
     if (!text) return;
+    const name = text.charAt(0).toUpperCase() + text.slice(1);
+    // Toilet paper, dish liquid…: straight to the Household section, never matched to a food.
+    if (isLikelyNonFood(text)) {
+      addToList([{ name, foodTypeId: null, aisle: nonFoodAisle(text), quantity, reason: "manual" }]);
+      return;
+    }
     const match = matchFoodType(text);
     if (match && match.confidence !== "low") {
       addFood(match.food, quantity);
       return;
     }
-    const name = text.charAt(0).toUpperCase() + text.slice(1);
     addToList([{ name, foodTypeId: null, aisle: "Other", quantity, reason: "manual" }]);
-    toast(`Added ${name}`);
+  };
+
+  const removeRow = (it: ShoppingListItem) => {
+    removeListItem(it.id);
+    toast(`Removed ${it.name}`, { undoable: true });
+  };
+
+  /** Non-food has nowhere to go in the larder: ticking it just takes it off the list. */
+  const tickHousehold = (it: ShoppingListItem) => {
+    removeListItem(it.id);
+    toast(`Ticked off ${it.name.toLowerCase()}`, { undoable: true });
   };
 
   const tickedDrafts = (): DraftItem[] =>
-    ticked.map((l) => {
+    tickedFood.map((l) => {
       const match = l.foodTypeId ? undefined : matchFoodType(l.name);
       const food = getFoodType(l.foodTypeId) ?? (match?.confidence === "high" ? match.food : undefined);
       const unknown = defaultsForUnknown(l.name);
@@ -214,11 +268,12 @@ export default function ListPage() {
 
   /** Review the ticked items first, so printed dates can be typed in before they're put away. */
   const reviewPutAway = () => {
-    if (ticked.length === 0) return;
+    if (tickedFood.length === 0) return;
     const drafts = tickedDrafts().map((d) => ({ ...lineToDraft({ name: d.name }), ...d, isFood: true }));
+    // "putaway": the review's Back goes to the List, and it says "N things from your list".
     startReviewSession("list", {
       drafts,
-      source: "list",
+      source: "putaway",
       removeListIds: ticked.map((l) => l.id),
       note: "Type any printed dates you can see on the packs. Anything left blank gets an estimate.",
     });
@@ -226,7 +281,7 @@ export default function ListPage() {
   };
 
   const putInLarder = () => {
-    if (ticked.length === 0) return;
+    if (tickedFood.length === 0) return;
     const drafts = tickedDrafts();
     // One undoable step: the items go in and the ticked rows come off the list.
     const created = addItems(drafts, "list", { removeListIds: ticked.map((l) => l.id) });
@@ -276,12 +331,12 @@ export default function ListPage() {
                 href="/plan"
                 aria-label="Meal plan"
                 title="Meal plan"
-                className="inline-flex h-11 w-9 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
               >
                 <CalendarDays size={22} aria-hidden />
               </Link>
             )}
-            <IconButton label="Share list" onClick={share} disabled={!hydrated || open.length === 0} className="w-9! lg:w-11!">
+            <IconButton label="Share list" onClick={share} disabled={!hydrated || open.length === 0} className="h-11! w-11! shrink-0">
               <Share2 size={20} />
             </IconButton>
           </>
@@ -308,7 +363,7 @@ export default function ListPage() {
             }
           />
         ) : (
-          <>
+          <div className="mt-6">
             {groups.map((g) => (
               <section key={g.aisle} aria-labelledby={`aisle-${g.aisle}`}>
                 <SectionTitle>
@@ -322,15 +377,33 @@ export default function ListPage() {
                       have={haveFor(it)}
                       onToggle={() => toggleListItem(it.id)}
                       onEdit={() => setEditing(it)}
-                      onRemove={() => {
-                        removeListItem(it.id);
-                        toast(`Removed ${it.name}`);
-                      }}
+                      onRemove={() => removeRow(it)}
                     />
                   ))}
                 </Card>
               </section>
             ))}
+
+            {householdRows.length > 0 && (
+              <section aria-labelledby="household-heading">
+                <SectionTitle>
+                  <span id="household-heading">Household</span>
+                </SectionTitle>
+                <p className="-mt-1 mb-2 text-sm text-ink-3">Not food, so these never go in the larder. Tick one to clear it.</p>
+                <Card className="divide-y divide-line">
+                  {householdRows.map((it) => (
+                    <ListRow
+                      key={it.id}
+                      item={it}
+                      household
+                      onToggle={() => tickHousehold(it)}
+                      onEdit={() => setEditing(it)}
+                      onRemove={() => removeRow(it)}
+                    />
+                  ))}
+                </Card>
+              </section>
+            )}
 
             {ticked.length > 0 && (
               <section aria-labelledby="trolley-heading">
@@ -358,55 +431,61 @@ export default function ListPage() {
                       have={haveFor(it)}
                       onToggle={() => toggleListItem(it.id)}
                       onEdit={() => setEditing(it)}
-                      onRemove={() => {
-                        removeListItem(it.id);
-                        toast(`Removed ${it.name}`);
-                      }}
+                      onRemove={() => removeRow(it)}
                     />
                   ))}
                 </Card>
-                <div className="mt-4">
-                  <Button block size="lg" onClick={reviewPutAway}>
-                    Put {ticked.length} item{ticked.length === 1 ? "" : "s"} in the larder
-                  </Button>
-                  <p className="mt-2 text-center text-xs text-ink-3">
-                    You can type printed dates on the next screen.{" "}
-                    <button type="button" onClick={putInLarder} className="inline-flex min-h-11 items-center font-medium text-primary underline-offset-2 hover:underline">
-                      Skip and use estimates
-                    </button>
-                  </p>
-                </div>
+                {tickedFood.length > 0 && (
+                  <div className="mt-4">
+                    <Button block size="lg" onClick={reviewPutAway}>
+                      Put {tickedFood.length} item{tickedFood.length === 1 ? "" : "s"} in the larder
+                    </Button>
+                    <p className="mt-2 text-center text-xs text-ink-3">
+                      You can type printed dates on the next screen.{" "}
+                      <button type="button" onClick={putInLarder} className="inline-flex min-h-11 items-center font-medium text-primary underline-offset-2 hover:underline">
+                        Skip and use estimates
+                      </button>
+                    </p>
+                  </div>
+                )}
               </section>
             )}
-          </>
+          </div>
         )}
 
         {hydrated && suggestions.length > 0 && (
-          <section aria-labelledby="suggestions-heading" className={cx(list.length === 0 ? "mt-2" : "mt-8")}>
-            <h2 id="suggestions-heading" className="mb-2 text-sm font-medium text-ink-2">
-              Running low? One tap to add
-            </h2>
-            <div className="scrollbar-none fade-x -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-wrap lg:px-0">
-              {suggestions.map((s) => (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() =>
-                    s.food
-                      ? addFood(s.food)
-                      : (addToList([{ name: s.name, foodTypeId: null, aisle: "Other", reason: "manual" }]),
-                        toast(`Added ${s.name}`))
-                  }
-                  className="relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface pl-3 pr-3.5 text-sm font-medium text-ink transition-colors after:absolute after:-inset-y-1 after:inset-x-0 after:content-[''] hover:border-primary hover:bg-primary-soft"
-                >
-                  <Plus size={15} aria-hidden className="text-primary" />
-                  {s.food?.emoji && <span aria-hidden>{s.food.emoji}</span>}
-                  {s.name}
-                  {s.why !== "staple" && <span className="text-xs text-ink-3">{s.why === "ran-out" ? "ran out" : s.why === "low" ? "running low" : "often bought"}</span>}
-                </button>
-              ))}
-            </div>
-          </section>
+          <SuggestionRow
+            id="suggestions-heading"
+            title="Running low? One tap to add"
+            className={list.length === 0 ? "mt-2" : "mt-8"}
+            chips={suggestions.map((s) => ({
+              key: s.key,
+              name: s.name,
+              emoji: s.food?.emoji,
+              note: s.why === "ran-out" ? "ran out" : s.why === "low" ? "running low" : s.why === "often" ? "often bought" : "always keep",
+              onAdd: () => {
+                if (s.food) addFood(s.food);
+                else addToList([{ name: s.name, foodTypeId: null, aisle: "Other", reason: "staple" }]);
+                toast(`Added ${s.name}`);
+              },
+            }))}
+          />
+        )}
+        {hydrated && commonStaples.length > 0 && (
+          <SuggestionRow
+            id="common-staples-heading"
+            title="Common staples"
+            className={list.length === 0 && suggestions.length === 0 ? "mt-2" : "mt-6"}
+            chips={commonStaples.map((f) => ({
+              key: f.id,
+              name: f.name,
+              emoji: f.emoji,
+              onAdd: () => {
+                addFood(f);
+                toast(`Added ${f.name}`);
+              },
+            }))}
+          />
         )}
       </div>
 
@@ -419,14 +498,48 @@ export default function ListPage() {
           setEditing(null);
         }}
         onRemove={() => {
-          if (editing) {
-            removeListItem(editing.id);
-            toast(`Removed ${editing.name}`);
-          }
+          if (editing) removeRow(editing);
           setEditing(null);
         }}
       />
     </div>
+  );
+}
+
+/* ---------- Suggestions ---------- */
+
+function SuggestionRow({
+  id,
+  title,
+  className,
+  chips,
+}: {
+  id: string;
+  title: string;
+  className?: string;
+  chips: Array<{ key: string; name: string; emoji?: string; note?: string; onAdd: () => void }>;
+}) {
+  return (
+    <section aria-labelledby={id} className={className}>
+      <h2 id={id} className="mb-2 text-sm font-medium text-ink-2">
+        {title}
+      </h2>
+      <div className="scrollbar-none fade-x -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 lg:mx-0 lg:flex-wrap lg:px-0">
+        {chips.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            onClick={c.onAdd}
+            className="relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface pl-3 pr-3.5 text-sm font-medium text-ink transition-colors after:absolute after:-inset-y-1 after:inset-x-0 after:content-[''] hover:border-primary hover:bg-primary-soft"
+          >
+            <Plus size={15} aria-hidden className="text-primary" />
+            {c.emoji && <span aria-hidden>{c.emoji}</span>}
+            {c.name}
+            {c.note && <span className="text-xs text-ink-3">{c.note}</span>}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -435,11 +548,14 @@ export default function ListPage() {
 function ListRow({
   item,
   have,
+  household,
   onToggle,
   onEdit,
   onRemove,
 }: {
   item: ShoppingListItem;
+  /** Non-food: ticking clears it rather than moving it to the trolley. */
+  household?: boolean;
   /** What's already in the larder, e.g. "1 L in the fridge", so you don't double up. */
   have?: string;
   onToggle: () => void;
@@ -448,7 +564,7 @@ function ListRow({
 }) {
   const food = getFoodType(item.foodTypeId);
   const q = quantityLabel(item);
-  const why = item.reason ? REASON_LABEL[item.reason] : null;
+  const why = item.note ?? (item.reason ? REASON_LABEL[item.reason] : null);
   return (
     <div className="flex items-center gap-1 pr-1">
       <button
@@ -468,7 +584,7 @@ function ListRow({
           {item.checked && <Check size={16} strokeWidth={3} />}
         </span>
         <span aria-hidden className="w-7 shrink-0 text-center text-xl leading-none">
-          {food?.emoji ?? "🛒"}
+          {food?.emoji ?? (household ? "🧻" : "🛒")}
         </span>
         <span className="min-w-0 flex-1">
           <span
@@ -480,7 +596,7 @@ function ListRow({
             {item.name}
           </span>
           {have && !item.checked ? (
-            <span className="block truncate text-xs font-medium text-soon">Already have {have}</span>
+            <span className="block text-xs font-medium text-soon [overflow-wrap:anywhere]">Already have {have}</span>
           ) : (
             why && <span className="block truncate text-xs text-ink-3">{why}</span>
           )}
@@ -497,7 +613,7 @@ function ListRow({
       >
         {q ?? "qty"}
       </button>
-      <IconButton label={`Remove ${item.name}`} onClick={onRemove} className="h-10 w-10">
+      <IconButton label={`Remove ${item.name}`} onClick={onRemove} className="h-11 w-11 shrink-0">
         <X size={18} />
       </IconButton>
     </div>
@@ -637,8 +753,9 @@ function QuickAdd({ onAddFood, onAddText }: { onAddFood: (f: FoodType, q?: numbe
             enterKeyHint="done"
           />
         </div>
-        <Button type="submit" aria-label="Add to list" className="h-12 w-12 shrink-0 px-0">
-          <Plus size={22} aria-hidden />
+        <Button type="submit" className="h-12 shrink-0 gap-1.5 px-4 text-[15px]">
+          <Plus size={22} strokeWidth={2.5} aria-hidden />
+          Add
         </Button>
       </div>
       <ul

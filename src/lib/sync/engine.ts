@@ -40,6 +40,7 @@ import {
   type SyncMeta,
 } from "@/lib/sync/outbox";
 import { syncStatusStore, type SyncState } from "@/lib/sync/status";
+import { removePushSubscription } from "@/lib/push/client";
 
 export const SYNC_STORAGE_KEY = "larder-sync";
 const BATCH = 200;
@@ -526,8 +527,17 @@ export class SyncEngine {
     this.save({ ...this.meta, failed: [] });
   }
 
-  /** Stop syncing on this device. Local data stays; queued changes are dropped. */
+  /**
+   * Stop syncing on this device. Local data stays; queued changes are dropped. This device's
+   * background reminders stop too: the server would otherwise keep pushing a household's food
+   * to a device that no longer shows it (best effort; sending in a household turns them back on).
+   */
   unbind() {
+    this.resetBinding();
+    void removePushSubscription().catch(() => undefined);
+  }
+
+  private resetBinding() {
     clearTimeout(this.flushTimer);
     clearTimeout(this.retryTimer);
     this.closeChannel();
@@ -537,7 +547,10 @@ export class SyncEngine {
   }
 
   async signOut() {
-    this.unbind();
+    // Remove this device's push subscription while still signed in (row-level security needs
+    // the session), but never hold up signing out for long.
+    await Promise.race([removePushSubscription().catch(() => undefined), new Promise((r) => setTimeout(r, 4000))]);
+    this.resetBinding();
     // Local scope: other devices signed in to this account stay signed in.
     await this.client.auth.signOut({ scope: "local" });
   }

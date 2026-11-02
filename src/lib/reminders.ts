@@ -1,10 +1,13 @@
 import type { ItemView } from "@/lib/selectors";
 import type { Settings } from "@/lib/types";
+import { browserTimeZone, isDue, lastScheduledAt, zonedDateISO } from "@/lib/push/schedule";
 
 /**
- * Client-side reminders. There is no server yet, so a digest is built from the
- * larder whenever the app is opened or becomes visible, and shown through the
- * service worker (or a plain Notification) if one is due.
+ * Reminder digests. With an account, the server sends them as background push
+ * notifications (see `src/lib/push`). Without one, or until push is set up, a digest is
+ * built from the larder whenever the app is opened or comes back into view, and shown
+ * through the service worker (or a plain Notification) if one is due. `buildDigest` is
+ * shared by both, so the wording is the same either way.
  */
 
 export const LAST_DIGEST_KEY = "larder-digest-last";
@@ -83,26 +86,23 @@ export function digestLine(d: Digest): string {
   return `${d.title}: ${d.body}`;
 }
 
-function sameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
 /**
- * Whether a digest should be sent now. Daily digests go out once a day at or
- * after the chosen hour; weekly ones on Sundays at or after that hour.
+ * Whether a digest should be shown now. Daily digests are due once a day from the chosen
+ * hour; weekly ones from that hour on Sunday. A missed one (Larder wasn't opened on Sunday)
+ * is still due on the next open, until the next one comes round.
+ * With no record of a previous digest, only today's slot counts, so turning reminders on
+ * in the morning doesn't fire yesterday's digest straight away.
  */
 export function isDigestDue(
   settings: Pick<Settings, "digest" | "digestHour" | "pushEnabled">,
   lastSentISO: string | null | undefined,
   now: Date = new Date(),
+  timeZone: string = browserTimeZone(),
 ): boolean {
   if (!settings.pushEnabled || settings.digest === "off") return false;
-  if (now.getHours() < settings.digestHour) return false;
-  if (settings.digest === "weekly" && now.getDay() !== 0) return false;
-  if (!lastSentISO) return true;
-  const last = new Date(lastSentISO);
-  if (Number.isNaN(last.getTime())) return true;
-  return !sameLocalDay(last, now);
+  const schedule = { cadence: settings.digest, hour: settings.digestHour, weekday: 0, timeZone };
+  if (!lastSentISO) return zonedDateISO(lastScheduledAt(now, schedule), timeZone) === zonedDateISO(now, timeZone);
+  return isDue(now, schedule, lastSentISO);
 }
 
 export function readLastSent(): string | null {
@@ -175,7 +175,12 @@ export async function runDigestIfDue(
   settings: Pick<Settings, "digest" | "digestHour" | "pushEnabled">,
   now: Date = new Date(),
 ): Promise<Digest | null> {
-  if (!isDigestDue(settings, readLastSent(), now)) return null;
+  const last = readLastSent();
+  if (!isDigestDue(settings, last, now)) {
+    // Remember when reminders started, so a weekly digest missed from here on still shows late.
+    if (!last && settings.pushEnabled && settings.digest !== "off") writeLastSent(now);
+    return null;
+  }
   const digest = buildDigest(views);
   // Nothing to say counts as "sent" so we don't keep re-checking all day.
   writeLastSent(now);

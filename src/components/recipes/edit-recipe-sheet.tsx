@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button, Field, Input, Segmented, Sheet, Stepper } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { parseIngredientLine } from "@/lib/recipes/import";
+import { slugId } from "@/lib/recipes/map";
 import { formatAmount } from "@/lib/recipes/quantity";
 import { useLarder } from "@/lib/store";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
@@ -17,9 +19,19 @@ export function ingredientLine(i: RecipeIngredient): string {
 const textareaClass =
   "block w-full rounded-2xl border border-line bg-surface px-4 py-3 text-[16px] leading-relaxed text-ink placeholder:text-ink-3 focus:border-primary focus:outline-none";
 
-/** Edit a saved recipe: title, servings, time, tablespoon size, ingredients and method as plain lines. */
-export function EditRecipeSheet({ recipe, open, onClose }: { recipe: Recipe; open: boolean; onClose: () => void }) {
+/** A blank recipe for "Write it in yourself". */
+export function blankRecipe(): Recipe {
+  return { id: "", title: "", source: "saved", servings: 4, ingredients: [], steps: [], tags: [], tbspMl: 20 };
+}
+
+/**
+ * Edit a saved recipe: title, servings, time, tablespoon size, ingredients and method as plain
+ * lines. With `isNew`, it writes a new recipe into Saved and opens it.
+ */
+export function EditRecipeSheet({ recipe, open, onClose, isNew = false }: { recipe: Recipe; open: boolean; onClose: (saved?: boolean) => void; isNew?: boolean }) {
   const update = useLarder((s) => s.updateSavedRecipe);
+  const saveRecipe = useLarder((s) => s.saveRecipe);
+  const router = useRouter();
   const [title, setTitle] = useState(recipe.title);
   const [servings, setServings] = useState(recipe.servings);
   const [minutes, setMinutes] = useState(recipe.minutes ? String(recipe.minutes) : "");
@@ -44,14 +56,25 @@ export function EditRecipeSheet({ recipe, open, onClose }: { recipe: Recipe; ope
       return;
     }
     const mins = Number(minutes);
-    update(recipe.id, {
+    const patch: Partial<Recipe> = {
       title: title.trim(),
       servings: Math.max(1, servings),
       minutes: Number.isFinite(mins) && mins > 0 ? Math.round(mins) : undefined,
       tbspMl: tbsp === "15" ? 15 : 20,
       ingredients: parsed,
       steps: method,
-    });
+    };
+    if (isNew) {
+      const id = slugId("imp", title.trim());
+      saveRecipe({ ...recipe, ...patch, id, source: "saved" } as Recipe);
+      toast("Saved to your recipes");
+      onClose(true);
+      router.push(`/recipes/${encodeURIComponent(id)}`);
+      return;
+    }
+    // Shared-licence recipes (Wikibooks, CC BY-SA) must say they were changed.
+    if (recipe.credit) patch.credit = { ...recipe.credit, changes: "Reformatted for Larder and edited by this household" };
+    update(recipe.id, patch);
     toast("Recipe updated");
     onClose();
   }
@@ -59,17 +82,17 @@ export function EditRecipeSheet({ recipe, open, onClose }: { recipe: Recipe; ope
   return (
     <Sheet
       open={open}
-      onClose={onClose}
-      title="Edit recipe"
+      onClose={() => onClose()}
+      title={isNew ? "Write a recipe" : "Edit recipe"}
       wide
       footer={
         <Button block size="lg" onClick={save}>
-          Save changes
+          {isNew ? "Save recipe" : "Save changes"}
         </Button>
       }
     >
       <div className="space-y-4 py-1">
-        <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}</Field>
+        <Field label="Title">{(id) => <Input id={id} value={title} placeholder={isNew ? "Nan's lamb casserole" : undefined} onChange={(e) => setTitle(e.target.value)} />}</Field>
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
           <div>
             <p className="mb-1.5 text-sm font-medium text-ink">Serves</p>

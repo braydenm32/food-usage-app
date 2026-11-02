@@ -22,11 +22,11 @@ export function authMessage(e: unknown): string {
   if (/flow state|code verifier|both auth code and code verifier/i.test(msg)) {
     return "That sign-in link was opened in a different browser from the one that asked for it. Enter the code from the email instead, or send a new one from here.";
   }
-  if (/signups not allowed|signup is disabled/i.test(msg)) return "New accounts aren't being accepted on this server right now.";
+  if (/signups not allowed|signup is disabled/i.test(msg)) return "Larder isn't taking new accounts right now. Try again later.";
   if (/provider is not enabled|unsupported provider/i.test(msg)) return "Google sign-in isn't switched on for Larder yet. Use your email instead.";
   if (/invalid email|unable to validate email|email address .* is invalid/i.test(msg)) return "That email address doesn't look right. Check it and try again.";
   if (e instanceof TypeError || /failed to fetch|network|load failed/i.test(msg)) {
-    return "Couldn't reach the sign-in server. Check your connection and try again.";
+    return "Couldn't reach Larder to sign you in. Check your connection and try again.";
   }
   return msg ? `Couldn't sign in: ${msg}` : "Couldn't sign in. Try again.";
 }

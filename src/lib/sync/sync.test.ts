@@ -266,7 +266,6 @@ describe("validating records from the server", () => {
       { ...good, unit: null },
       { ...good, addedAt: "not a date" },
       { ...good, dateKind: "eat-by" },
-      { ...good, source: "magic" },
       "a string",
       [good],
       null,
@@ -323,6 +322,23 @@ describe("validating records from the server", () => {
 
     expect(parseIncoming("mealPlan", "m", { date: "2026-10-30", recipeId: "r" })).toEqual({ id: "m", date: "2026-10-30", recipeId: "r" });
     expect(parseIncoming("mealPlan", "m", { date: "someday", recipeId: "r" })).toBeNull();
+
+    expect(parseIncoming("savedRecipes", "r", { ...recipe, servingsEstimated: true })).toMatchObject({ servingsEstimated: true });
+    expect(parseIncoming("savedRecipes", "r", { ...recipe, servingsEstimated: "yes" })).not.toHaveProperty("servingsEstimated");
+
+    expect(parseIncoming("staples", "s", { name: "Milk", foodTypeId: "milk-full-cream", addedAt: at, emoji: "🥛" })).toEqual({
+      id: "s",
+      name: "Milk",
+      foodTypeId: "milk-full-cream",
+      addedAt: at,
+      emoji: "🥛",
+    });
+    expect(parseIncoming("staples", "s", { name: "" })).toBeNull();
+    expect(parseIncoming("staples", "s", { foodTypeId: "milk" })).toBeNull();
+  });
+
+  it("keeps an item whose source comes from a newer version, as a manual add", () => {
+    expect((parseIncoming("items", "a", { ...item("a"), source: "fridge-cam" }) as PantryItem).source).toBe("manual");
   });
 
   it("refuses ids that could reach Object.prototype", () => {

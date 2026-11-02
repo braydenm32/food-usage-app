@@ -60,8 +60,16 @@ export function startReviewSession(method: AddMethod, s: Omit<AddSession, "updat
 }
 
 /** Methods with unfinished drafts, for the "pick up where you left off" banner. */
-export function pendingSessions(): { method: AddMethod; count: number }[] {
-  return METHODS.map((m) => ({ method: m, count: readSession(m)?.drafts.length ?? 0 })).filter((x) => x.count > 0);
+export function pendingSessions(): { method: AddMethod; count: number; source?: PantryItem["source"] }[] {
+  return METHODS.map((m) => {
+    const s = readSession(m);
+    return { method: m, count: s?.drafts.length ?? 0, source: s?.source };
+  }).filter((x) => x.count > 0);
+}
+
+/** Throw away one method's unfinished drafts. */
+export function clearSession(method: AddMethod) {
+  writeSession(method, null);
 }
 
 /**

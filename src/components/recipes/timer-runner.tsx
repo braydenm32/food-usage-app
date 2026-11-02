@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { BellRing, Timer } from "lucide-react";
-import { beep, notifyTimer, secondsLeft, useCookTimers } from "@/lib/cook-timers";
+import { BellRing, Timer, Volume2 } from "lucide-react";
+import { alarmReady, beep, notifyTimer, secondsLeft, unlockAlarm, useCookTimers } from "@/lib/cook-timers";
 import { formatClock } from "@/lib/recipes/timers";
 import { useHydrated } from "@/lib/use-hydrated";
 
@@ -19,6 +19,8 @@ export function TimerRunner() {
   const timers = useCookTimers((s) => s.timers);
   const ring = useCookTimers((s) => s.ring);
   const [now, setNow] = useState(clock);
+  // After a reload, sound needs a fresh tap; checked as the clock ticks.
+  const [soundOn, setSoundOn] = useState(false);
   const pathname = usePathname();
   const inCookMode = useSearchParams().get("cook") === "1";
 
@@ -30,6 +32,7 @@ export function TimerRunner() {
     const tick = () => {
       const n = clock();
       setNow(n);
+      setSoundOn(alarmReady());
       const due = useCookTimers.getState().timers.filter((t) => t.endsAt !== null && !t.rung && t.endsAt <= n);
       if (due.length === 0) return;
       ring(due.map((t) => t.id));
@@ -64,10 +67,11 @@ export function TimerRunner() {
   const href = `/recipes/${encodeURIComponent(t.recipeId)}?cook=1`;
   if (pathname === `/recipes/${encodeURIComponent(t.recipeId)}` && !t.rung) return null;
   return (
+    <div className="fixed left-1/2 z-40 flex -translate-x-1/2 items-center gap-1.5 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] lg:bottom-6">
     <Link
       href={href}
       className={
-        "fixed left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold shadow-lg bottom-[calc(5.5rem+env(safe-area-inset-bottom))] lg:bottom-6 " +
+        "flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold shadow-lg " +
         (t.rung ? "bg-spoiled text-on-status" : "bg-ink text-paper")
       }
       aria-label={t.rung ? `${t.label} timer done for ${t.recipeTitle}. Open cook mode` : `${t.label} timer, ${formatClock(secondsLeft(t, now))} left. Open cook mode`}
@@ -77,5 +81,18 @@ export function TimerRunner() {
       <span className="max-w-[10rem] truncate font-normal opacity-80">{t.recipeTitle}</span>
       {timers.length > 1 && <span className="font-normal opacity-80">+{timers.length - 1}</span>}
     </Link>
+      {!soundOn && (
+        <button
+          type="button"
+          onClick={() => {
+            unlockAlarm();
+            setSoundOn(alarmReady());
+          }}
+          className="flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-full bg-surface px-3 text-sm font-semibold text-ink shadow-lg ring-1 ring-line"
+        >
+          <Volume2 size={16} aria-hidden /> Tap to enable sound
+        </button>
+      )}
+    </div>
   );
 }

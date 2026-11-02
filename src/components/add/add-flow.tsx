@@ -1,13 +1,16 @@
 "use client";
 
+import { askForReminders } from "@/lib/push/client";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
 import {
+  CameraOff,
   ChevronLeft,
   ChevronRight,
   ClipboardPaste,
-  NotebookPen, Refrigerator,
+  NotebookPen,
+  Refrigerator,
   Receipt,
   ScanBarcode,
   Search,
@@ -17,8 +20,9 @@ import { Button, PageHeader } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
-import { draftKey, type BarcodeResponse, type ParseResponse, type ReviewDraft } from "@/lib/drafts";
-import { DEFAULT_SOURCE, isMethod, pendingSessions, useAddSession, type AddMethod } from "./session";
+import { draftKey, foodToDraft, freeTextDraft, type BarcodeResponse, type ParseResponse, type ReviewDraft } from "@/lib/drafts";
+import { getFoodType } from "@/lib/shelf-life/foods";
+import { DEFAULT_SOURCE, isMethod, useAddSession, type AddMethod } from "./session";
 import { ReviewList, type MergePlan } from "./review-list";
 import { useAiConfigured } from "./ai-status";
 import { PhotoCapture } from "./photo-capture";
@@ -97,50 +101,19 @@ export function AddSkeleton() {
 
 /* ---------- Hub ---------- */
 
-const PENDING_LABEL: Record<AddMethod, string> = {
-  receipt: "from a receipt",
-  list: "from a list photo",
-  shelf: "from a shelf photo",
-  paste: "from a pasted list",
-  barcode: "from barcode scans",
-  manual: "added by hand",
-};
-
-const PHOTO_METHODS: AddMethod[] = ["receipt", "list"];
+const REVIEW_METHODS: AddMethod[] = ["receipt", "list", "shelf", "paste"];
 
 function Hub() {
-  const [pending] = useState(pendingSessions);
   const ai = useAiConfigured();
-  // Without AI, photo reading can't work, so the paste flow leads and the photo options say they need setup.
+  // Without AI, photo reading can't work: paste leads, and the three photo ways fold into one quiet row.
   const hero: AddMethod = ai === false ? "paste" : "receipt";
-  const secondary: AddMethod[] =
-    ai === false ? ["barcode", "manual", "receipt", "list", "shelf"] : ["paste", "list", "shelf", "barcode", "manual"];
+  const secondary: AddMethod[] = ai === false ? ["barcode", "manual"] : ["paste", "list", "shelf", "barcode", "manual"];
   const { Icon: HeroIcon } = META[hero];
 
   return (
     <>
       <PageHeader title="Add food" subtitle="Get your shopping into the larder. Pick whatever’s quickest." />
       <div className="flex flex-col gap-6 px-5 lg:px-0">
-        {pending.length > 0 && (
-          <div className="flex flex-col gap-2">
-            {pending.map((p) => (
-              <Link
-                key={p.method}
-                href={`/add?method=${p.method}${["receipt", "list", "shelf", "paste"].includes(p.method) ? "&step=review" : ""}`}
-                className="flex min-h-14 items-center gap-3 rounded-2xl bg-soon-soft px-4 py-3 text-[15px] text-ink"
-              >
-                <span className="flex-1">
-                  <span className="font-semibold">
-                    {p.count} {p.count === 1 ? "item" : "items"} waiting
-                  </span>{" "}
-                  <span className="text-ink-2">{PENDING_LABEL[p.method]}</span>
-                </span>
-                <span className="font-semibold text-soon">Continue</span>
-              </Link>
-            ))}
-          </div>
-        )}
-
         <Link
           href={`/add?method=${hero}`}
           className="group relative flex flex-col gap-4 overflow-hidden rounded-[var(--radius-card)] bg-primary p-6 text-primary-ink shadow-card sm:flex-row sm:items-center"
@@ -160,32 +133,32 @@ function Hub() {
         <ul className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface">
           {secondary.map((m) => {
             const { Icon, title, blurb } = META[m];
-            const needsSetup = ai === false && PHOTO_METHODS.includes(m);
             return (
               <li key={m}>
                 <Link href={`/add?method=${m}`} className="flex min-h-[4.5rem] items-center gap-4 px-4 py-3.5 hover:bg-surface-2">
-                  <span
-                    aria-hidden
-                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${needsSetup ? "bg-surface-2 text-ink-3" : "bg-primary-soft text-primary"}`}
-                  >
+                  <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
                     <Icon size={21} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-x-2 text-[16px] font-semibold text-ink">
-                      {title}
-                      {needsSetup && (
-                        <span className="rounded-full bg-surface-2 px-2 py-0.5 text-xs font-semibold text-ink-2">Needs setup</span>
-                      )}
-                    </span>
-                    <span className="block text-sm text-ink-2">
-                      {needsSetup ? "Photo reading isn’t switched on here yet." : blurb}
-                    </span>
+                    <span className="block text-[16px] font-semibold text-ink">{title}</span>
+                    <span className="block text-sm text-ink-2">{blurb}</span>
                   </span>
                   <ChevronRight size={18} aria-hidden className="shrink-0 text-ink-3" />
                 </Link>
               </li>
             );
           })}
+          {ai === false && (
+            <li className="flex min-h-[4.5rem] items-center gap-4 px-4 py-3.5">
+              <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface-2 text-ink-3">
+                <CameraOff size={21} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[16px] font-semibold text-ink-2">Receipts, lists and shelf photos</span>
+                <span className="block text-sm text-ink-3">Photo reading isn’t available yet. Paste or type your list instead.</span>
+              </span>
+            </li>
+          )}
         </ul>
 
         <p className="text-sm text-ink-3">
@@ -202,6 +175,8 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   const router = useRouter();
   const addItems = useLarder((s) => s.addItems);
   const { session, setSession, setDrafts, clear } = useAddSession(method);
+  // Put away from the shopping list: a list session the List page started.
+  const putaway = session.source === "putaway";
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [lastScan, setLastScan] = useState<{ text: string; emoji: string; ok: boolean } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -239,7 +214,29 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
         include: true,
         confidence: "low",
         isFood: true,
+        barcode: code,
       };
+      // Scanned before in this household: use what they said it was, no lookup needed.
+      const memo = useLarder.getState().barcodes[code];
+      if (memo) {
+        const food = getFoodType(memo.foodTypeId);
+        const base = food ? foodToDraft(food) : freeTextDraft(memo.name);
+        const known: ReviewDraft = {
+          ...base,
+          key,
+          name: memo.name,
+          emoji: memo.emoji,
+          unit: memo.unit,
+          quantity: memo.quantity > 0 ? memo.quantity : base.quantity,
+          rawText: `${code} · scanned before`,
+          barcode: code,
+          include: true,
+          confidence: "high",
+        };
+        setDrafts((ds) => [known, ...ds]);
+        setLastScan({ text: `Added ${memo.name}`, emoji: memo.emoji, ok: true });
+        return;
+      }
       setDrafts((ds) => [placeholder, ...ds]);
       setPending((p) => new Set(p).add(key));
       setLastScan({ text: `Scanned ${code}. Looking it up…`, emoji: "🔎", ok: true });
@@ -248,7 +245,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
         const res = await fetch(`/api/barcode/${code}`);
         const json = (await res.json().catch(() => null)) as BarcodeResponse | null;
         if (json?.found && json.draft) {
-          next = { ...json.draft, key };
+          next = { ...json.draft, key, barcode: code };
           setLastScan({ text: `Added ${json.brand ? `${json.brand} ` : ""}${json.name}`, emoji: json.draft.emoji, ok: true });
         } else if (res.status === 404) {
           next = { ...placeholder, emoji: "🛒", rawText: `${code} · not in the product database. Tap to choose the food.` };
@@ -273,6 +270,8 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
   function submit(fresh: ReviewDraft[], merges: MergePlan[]) {
     if (fresh.length + merges.length === 0) return;
     setSubmitting(true);
+    // The very first add lands on Today, where "eat this first" is the payoff; later adds stay on the Larder.
+    const firstEver = !useLarder.getState().events.some((e) => e.type === "added");
     const removeListIds = session.removeListIds?.length ? session.removeListIds : undefined;
     const created = addItems(fresh, session.source, merges.length || removeListIds ? { merge: merges.length ? merges : undefined, removeListIds } : undefined);
     const n = created.length;
@@ -284,20 +283,48 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
           ? `Added ${n} ${n === 1 ? "item" : "items"} to your larder`
           : `Added ${n} ${n === 1 ? "item" : "items"}, topped up ${m}`;
     toast(message, { undoable: true });
+    if (firstEver && !useLarder.getState().settings.pushEnabled) {
+      // Ask for reminders at the moment they make sense, from a tap (browsers need a user gesture).
+      toast("Want a heads-up when something needs eating?", {
+        action: { label: "Remind me", onClick: () => void askForReminders({ once: true }) },
+      });
+    }
     clear();
-    router.push("/pantry");
+    router.push(firstEver ? "/" : "/pantry");
   }
 
   function startOver() {
+    const back = putaway ? "/list" : `/add?method=${method}`;
     clear();
-    router.replace(`/add?method=${method}`);
+    router.replace(back);
   }
 
-  const backHref = inReview ? `/add?method=${method}` : "/add";
-  const reviewTitle = method === "shelf" ? "Check what we spotted" : session.removeListIds?.length
-    ? "Put away your shopping"
-    : method === "receipt" ? "Check your receipt" : method === "list" ? "Check your list" : "Check these items";
+  /** "Clear" on the to-add list: undoable, since it sits right by the search box. */
+  function clearWithUndo() {
+    const before = drafts;
+    clear();
+    toast(`Cleared ${before.length} ${before.length === 1 ? "item" : "items"}`, {
+      action: { label: "Undo", onClick: () => setDrafts(() => before) },
+      duration: 8000,
+    });
+  }
+
+  const backHref = putaway ? "/list" : inReview ? `/add?method=${method}` : "/add";
+  const backLabel = putaway ? "Back to your list" : inReview ? "Back" : "All ways to add";
+  const reviewTitle =
+    putaway || session.removeListIds?.length
+      ? "Put away your shopping"
+      : method === "shelf"
+        ? "Check what we spotted"
+        : method === "receipt"
+          ? "Check your receipt"
+          : method === "list"
+            ? "Check your list"
+            : "Check these items";
   const foodCount = drafts.filter((d) => d.isFood).length;
+  const reviewSub = putaway
+    ? `${foodCount} ${foodCount === 1 ? "thing" : "things"} from your list. Untick anything you didn’t buy.`
+    : `${session.storeName ? `${session.storeName} · ` : ""}${foodCount === 1 ? "1 food" : `${foodCount} foods`} found. Untick anything you didn’t buy.`;
   const showPrices =
     session.source === "receipt" || session.source === "order" || drafts.some((d) => d.price !== undefined);
 
@@ -309,24 +336,27 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
           className="-ml-2 inline-flex h-11 items-center gap-1 rounded-full pl-1 pr-3 text-[15px] font-medium text-ink-2 hover:bg-surface-2 hover:text-ink"
         >
           <ChevronLeft size={20} aria-hidden />
-          {inReview ? "Back" : "All ways to add"}
+          {backLabel}
         </Link>
       </div>
       <div className="-mt-3 lg:-mt-6">
         <PageHeader
           title={inReview ? reviewTitle : meta.pageTitle}
-          subtitle={
-            inReview
-              ? `${session.storeName ? `${session.storeName} · ` : ""}${foodCount} ${foodCount === 1 ? "food" : "foods"} found. Untick anything you didn’t buy.`
-              : meta.pageSub
-          }
+          subtitle={inReview ? reviewSub : meta.pageSub}
         />
       </div>
 
       {inReview ? (
         <>
           {session.note && <InfoNotice className="mx-5 mb-4 lg:mx-0">{session.note}</InfoNotice>}
-          <ReviewList drafts={drafts} setDrafts={setDrafts} onSubmit={submit} submitting={submitting} showPrices={showPrices} />
+          <ReviewList
+            drafts={drafts}
+            setDrafts={setDrafts}
+            onSubmit={submit}
+            submitting={submitting}
+            showPrices={showPrices}
+            summarise={!putaway}
+          />
           <div className="mt-2 flex justify-center">
             <Button variant="ghost" onClick={startOver}>
               Discard and start over
@@ -336,19 +366,28 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
       ) : (
         <div className="flex flex-col gap-8">
           <div className="px-5 lg:px-0">
-            {drafts.length > 0 && (method === "receipt" || method === "list" || method === "shelf" || method === "paste") && (
-              <Link
-                href={`/add?method=${method}&step=review`}
-                className="mb-5 flex min-h-14 items-center gap-3 rounded-2xl bg-soon-soft px-4 py-3 text-[15px] text-ink"
-              >
-                <span className="flex-1">
+            {drafts.length > 0 && REVIEW_METHODS.includes(method) && (
+              <div className="mb-5 flex min-h-14 items-center gap-1 rounded-2xl bg-soon-soft py-1.5 pl-4 pr-1.5 text-[15px] text-ink">
+                <span className="min-w-0 flex-1 py-1">
                   <span className="font-semibold">
                     {drafts.length} {drafts.length === 1 ? "line" : "lines"} still to check
                   </span>{" "}
-                  <span className="text-ink-2">from last time</span>
+                  <span className="text-ink-2">{putaway ? "from your shopping list" : "from last time"}</span>
                 </span>
-                <span className="font-semibold text-soon">Continue</span>
-              </Link>
+                <Link
+                  href={`/add?method=${method}&step=review`}
+                  className="inline-flex min-h-11 items-center rounded-full px-3 font-semibold text-soon hover:bg-surface"
+                >
+                  Continue
+                </Link>
+                <button
+                  type="button"
+                  onClick={clearWithUndo}
+                  className="inline-flex min-h-11 items-center rounded-full px-3 font-medium text-ink-2 hover:bg-surface hover:text-ink"
+                >
+                  Clear
+                </button>
+              </div>
             )}
             {method === "receipt" && <PhotoCapture kind="receipt" onResult={onParsed} />}
             {method === "list" && <PhotoCapture kind="list" onResult={onParsed} />}
@@ -377,7 +416,7 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
                 <>
                   <div className="mb-3 flex items-baseline justify-between px-5 lg:px-0">
                     <h2 className="font-display text-xl text-ink">To add</h2>
-                    <Button variant="ghost" size="sm" onClick={() => clear()}>
+                    <Button variant="ghost" size="sm" onClick={clearWithUndo}>
                       Clear
                     </Button>
                   </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { MoreHorizontal, type LucideIcon } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cx } from "@/components/ui";
 
 export interface MenuAction {
@@ -11,21 +11,36 @@ export interface MenuAction {
   danger?: boolean;
 }
 
-/** A small "more actions" menu: keyboard friendly (arrows, Escape), closes on outside press. */
+/**
+ * A small "more actions" menu: keyboard friendly (arrows, Escape), closes on outside press.
+ * Pass `trigger` to replace the ⋯ button's content (the button keeps the menu wiring), and
+ * `onTrigger` to handle a press yourself: return false to keep the menu shut.
+ */
 export function OverflowMenu({
   label,
   actions,
   placement = "down",
   className,
+  trigger,
+  triggerClassName,
+  triggerProps,
+  onTrigger,
+  heading,
 }: {
   label: string;
   actions: MenuAction[];
   placement?: "up" | "down";
   className?: string;
+  trigger?: ReactNode;
+  triggerClassName?: string;
+  triggerProps?: ButtonHTMLAttributes<HTMLButtonElement>;
+  onTrigger?: () => boolean;
+  /** Short text shown at the top of the menu, e.g. "How much did you use?". */
+  heading?: string;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
+  const trig = useRef<HTMLButtonElement>(null);
   const menuId = useId();
 
   useEffect(() => {
@@ -40,7 +55,7 @@ export function OverflowMenu({
 
   const close = (refocus = true) => {
     setOpen(false);
-    if (refocus) trigger.current?.focus();
+    if (refocus) trig.current?.focus();
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -65,17 +80,25 @@ export function OverflowMenu({
   return (
     <div ref={wrap} className={cx("relative", className)} onKeyDown={open ? onKeyDown : undefined}>
       <button
-        ref={trigger}
+        ref={trig}
         type="button"
-        aria-label={label}
-        title={label}
+        aria-label={trigger ? undefined : label}
+        title={trigger ? undefined : label}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+        {...triggerProps}
+        onClick={(e) => {
+          triggerProps?.onClick?.(e);
+          if (onTrigger && !open && onTrigger() === false) return;
+          setOpen((o) => !o);
+        }}
+        className={
+          triggerClassName ??
+          "inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+        }
       >
-        <MoreHorizontal size={20} aria-hidden />
+        {trigger ?? <MoreHorizontal size={20} aria-hidden />}
       </button>
       {open && (
         <div
@@ -87,6 +110,11 @@ export function OverflowMenu({
             placement === "down" ? "top-full mt-1" : "bottom-full mb-1",
           )}
         >
+          {heading && (
+            <p aria-hidden className="px-4 pb-1 pt-1.5 text-xs font-medium text-ink-2">
+              {heading}
+            </p>
+          )}
           {actions.map((a) => (
             <button
               key={a.label}

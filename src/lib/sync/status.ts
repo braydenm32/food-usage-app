@@ -78,7 +78,7 @@ export function describeSync(
   const changes = `${s.pending} change${s.pending === 1 ? "" : "s"}`;
   switch (s.state) {
     case "off":
-      return "Sync isn't set up on this server";
+      return "Sharing isn't available yet. Food stays on this device";
     case "signed-out":
       return "Not signed in. Food stays on this device";
     case "no-household":

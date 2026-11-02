@@ -6,7 +6,10 @@
  *   record's `id`.
  * - `overrides` is a record keyed by foodTypeId, so the key is the row id.
  * - `profile` is a singleton stored as the row id "profile".
+ * - `staples` ("Always keep in stock") is shared by the household, by each staple's `id`.
  * - `settings` is per device and never syncs.
+ * - `barcodes` (what each scanned barcode turned out to be) is device-local memory and never
+ *   syncs: it is a lookup cache, not household data, and would only add churn.
  */
 import { DEFAULT_LOCATIONS, DEFAULT_PROFILE, MAX_EVENTS, type LarderState } from "@/lib/store";
 import type {
@@ -20,6 +23,7 @@ import type {
   RecipeIngredient,
   ShelfLifeOverride,
   ShoppingListItem,
+  Staple,
   StorageLocation,
   Unit,
 } from "@/lib/types";
@@ -33,6 +37,7 @@ export const SYNCED_COLLECTIONS = [
   "savedRecipes",
   "shoppingList",
   "mealPlan",
+  "staples",
 ] as const;
 
 export type CollectionName = (typeof SYNCED_COLLECTIONS)[number];
@@ -43,7 +48,7 @@ export const PROFILE_ID = "profile";
 /** Longest id the table accepts (check constraint). Longer ids can't sync. */
 export const MAX_ID_LENGTH = 100;
 
-const ARRAY_COLLECTIONS = new Set<CollectionName>(["items", "events", "locations", "savedRecipes", "shoppingList", "mealPlan"]);
+const ARRAY_COLLECTIONS = new Set<CollectionName>(["items", "events", "locations", "savedRecipes", "shoppingList", "mealPlan", "staples"]);
 
 export const isCollection = (c: string): c is CollectionName => (SYNCED_COLLECTIONS as readonly string[]).includes(c);
 
@@ -86,6 +91,7 @@ export function emptySynced(): SyncedState {
     savedRecipes: [],
     shoppingList: [],
     mealPlan: [],
+    staples: [],
   };
 }
 
@@ -122,7 +128,7 @@ function pick(data: Obj, checks: Record<string, (v: unknown) => boolean>): Obj {
 }
 
 const isDateKind = oneOf("use-by", "best-before");
-const isItemSource = oneOf("receipt", "list", "barcode", "manual", "order");
+const isItemSource = oneOf("receipt", "list", "barcode", "manual", "order", "putaway");
 const isEventType = oneOf("added", "opened", "moved", "used", "binned", "edited", "cooked");
 const isLocationKind = oneOf("pantry", "fridge", "freezer");
 const isRecipeSource = oneOf("ai", "database", "saved", "builtin");
@@ -133,7 +139,7 @@ const foodTypeIdOf = (v: unknown) => (isStr(v) ? v : null);
 
 function parseItem(id: string, d: Obj): PantryItem | null {
   if (!isStr(d.name) || !isStr(d.locationId) || !isNum(d.quantity) || !isStr(d.unit)) return null;
-  if (!isDate(d.addedAt) || !isDateKind(d.dateKind) || !isItemSource(d.source)) return null;
+  if (!isDate(d.addedAt) || !isDateKind(d.dateKind)) return null;
   return {
     ...pick(d, {
       price: isNum,
@@ -155,7 +161,8 @@ function parseItem(id: string, d: Obj): PantryItem | null {
     unit: d.unit as Unit,
     addedAt: d.addedAt,
     dateKind: d.dateKind,
-    source: d.source,
+    // A source this version doesn't know (from a newer client) is kept as a manual add, not dropped.
+    source: isItemSource(d.source) ? d.source : "manual",
   };
 }
 
@@ -189,6 +196,7 @@ function parseProfile(d: Obj): HouseholdProfile {
     allergies: strArr(d.allergies),
     likes: strArr(d.likes),
     dislikes: strArr(d.dislikes),
+    ...(d.confirmed === true ? { confirmed: true } : {}),
   };
 }
 
@@ -212,7 +220,7 @@ function parseRecipe(id: string, d: Obj): Recipe | null {
   if (!isStr(d.title) || !isRecipeSource(d.source) || !isNum(d.servings)) return null;
   if (!Array.isArray(d.ingredients) || !Array.isArray(d.steps)) return null;
   return {
-    ...pick(d, { sourceUrl: isWebUrl, image: isWebUrl, minutes: isNum, summary: isStr, savedAt: isDate, tbspMl: (x) => x === 15 || x === 20 }),
+    ...pick(d, { sourceUrl: isWebUrl, image: isWebUrl, minutes: isNum, summary: isStr, savedAt: isDate, tbspMl: (x) => x === 15 || x === 20, servingsEstimated: (x) => typeof x === "boolean" }),
     ...(parseCredit(d.credit) ? { credit: parseCredit(d.credit) } : {}),
     id,
     title: d.title,
@@ -227,7 +235,7 @@ function parseRecipe(id: string, d: Obj): Recipe | null {
 function parseListItem(id: string, d: Obj): ShoppingListItem | null {
   if (!isStr(d.name) || typeof d.checked !== "boolean" || !isDate(d.addedAt)) return null;
   return {
-    ...pick(d, { quantity: isNum, unit: isStr, reason: isListReason, recipeId: isStr }),
+    ...pick(d, { quantity: isNum, unit: isStr, reason: isListReason, recipeId: isStr, note: isStr }),
     id,
     name: d.name,
     foodTypeId: foodTypeIdOf(d.foodTypeId),
@@ -240,7 +248,19 @@ function parseListItem(id: string, d: Obj): ShoppingListItem | null {
 
 function parseMealPlan(id: string, d: Obj): MealPlanEntry | null {
   if (!isDate(d.date) || !isStr(d.recipeId)) return null;
-  return { ...pick(d, { servings: isNum }), id, date: d.date, recipeId: d.recipeId };
+  const copy = isObj(d.recipe) && isStr((d.recipe as Obj).id) ? parseRecipe((d.recipe as Obj).id as string, d.recipe as Obj) : null;
+  return { ...pick(d, { servings: isNum, cookedAt: isStr }), ...(copy ? { recipe: copy } : {}), id, date: d.date, recipeId: d.recipeId };
+}
+
+function parseStaple(id: string, d: Obj): Staple | null {
+  if (!isStr(d.name) || d.name.trim().length === 0) return null;
+  return {
+    ...pick(d, { emoji: isStr }),
+    id,
+    name: d.name,
+    foodTypeId: foodTypeIdOf(d.foodTypeId),
+    addedAt: isDate(d.addedAt) ? d.addedAt : new Date(0).toISOString(),
+  };
 }
 
 /** Validate and tidy a record from the server. Returns null for anything unusable. */
@@ -264,6 +284,8 @@ export function parseIncoming(collection: CollectionName, id: string, data: unkn
       return parseListItem(id, data);
     case "mealPlan":
       return parseMealPlan(id, data);
+    case "staples":
+      return parseStaple(id, data);
     default:
       return null;
   }

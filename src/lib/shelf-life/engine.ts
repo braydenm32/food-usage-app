@@ -4,24 +4,73 @@ const DAY_MS = 86_400_000;
 
 type StorageKind = StorageLocation["kind"];
 
-/** Fallback days when an item has no matched food type (see `unknownDays`). */
-const FALLBACK_DAYS = { pantry: 30, fridge: 5, freezer: 90 } as const;
-/** Unknown raw meat or seafood: assume the shortest common fridge life. */
-const HIGH_RISK_DAYS = 3;
+/**
+ * Fallback days when an item has no matched food type (see `unknownDays`). The pantry figure is
+ * deliberately short: an unknown food on the bench could be anything, so we ask to check it soon.
+ */
+const FALLBACK_DAYS = { pantry: 7, fridge: 5, freezer: 90 } as const;
+/** Unknown raw meat or seafood: the household rule for raw mince, poultry and fish (2 fridge days). */
+const HIGH_RISK_DAYS = 2;
+/**
+ * A known food kept somewhere its table has no days for (milk in the pantry, cooked food on the
+ * bench, a frozen-only food in the fridge): a safe short stand-in, never the other spot's long life.
+ */
+const UNSUITED_DAYS = { pantry: 1, fridge: 3 } as const;
 /** Freezer life used for foods whose table says "not recommended frozen". */
 export const FREEZER_NOT_RECOMMENDED_DAYS = 30;
 
 const SPOT_NAME: Record<StorageKind, string> = { pantry: "pantry", fridge: "fridge", freezer: "freezer" };
 
 const HIGH_RISK =
-  /\b(meat|mince|chicken|fish|prawns?|seafood|fillets?|steaks?|sausages?|snags?|pork|lamb|beef|veal|kangaroo|turkey|duck|chops?|cutlets?|mussels?|oysters?|squid|calamari|salmon|tuna steak|crab|lobster|scallops?|goat|venison|rabbit|quail|wings?|drumsticks?|thighs?|brisket|rissoles?|meatballs?|offal)\b/i;
+  /\b(meat|mince|chicken|chook|fish|prawns?|shrimps?|seafood|fillets?|steaks?|sausages?|snags?|pork|lamb|beef|veal|kangaroo|roo|turkey|duck|chops?|cutlets?|mussels?|oysters?|squid|calamari|octopus|cuttlefish|salmon|tuna|sardines?|mackerel|barramundi|barra|flathead|trout|whiting|bream|snapper|cod|basa|hoki|ling|dory|kingfish|mahi ?mahi|swordfish|tilapia|crab|lobster|crayfish|yabbies|marron|scallops?|clams?|pipis|vongole|goat|mutton|venison|rabbit|quail|wings?|drumsticks?|thighs?|brisket|rissoles?|meatballs?|patt(?:y|ies)|burgers?|offal|liver)\b/i;
+/**
+ * Tinned, dried and cured foods that share a word with raw meat or fish ("tuna in springwater",
+ * "beef jerky"). Kept narrow on purpose: words like "sauce", "flavour" or "dog" also turn up in
+ * raw foods ("Chicken fillets in teriyaki sauce", "Hot dog sausages"), which must stay cautious.
+ */
+const SHELF_STABLE =
+  /\b(tins?|tinned|cans?|canned|in (?:spring ?water|brine|oil)|springwater|jerky|biltong|dried|stock|broth|powder|(?:fish|oyster) sauce|prawn crackers?|(?:instant|2 ?minute) noodles?)\b/i;
 
 /**
  * True when free text looks like raw meat or seafood, which must be kept cold and used fast.
  * Used for foods we couldn't match, so they get a cautious estimate.
  */
 export function isHighRisk(name: string): boolean {
-  return HIGH_RISK.test(name);
+  return HIGH_RISK.test(name) && !SHELF_STABLE.test(name);
+}
+
+/**
+ * Raw meat and fish, and cooked leftovers: foods where "about 3 days" is the real risk.
+ * They show in "Eat me first" a day earlier than everything else (see `soonDaysFor`).
+ */
+export function isHighRiskFood(item: Pick<PantryItem, "name">, food: FoodType | undefined): boolean {
+  if (!food) return isHighRisk(item.name);
+  if (food.category === "meat" || food.category === "seafood") return food.dateKind === "use-by";
+  // Leftovers and cooked foods are filed under "other" with a use-by date.
+  return food.category === "other" && food.dateKind === "use-by" && food.defaultLocation === "fridge";
+}
+
+/** Extra "use soon" days for high-risk foods (see `isHighRiskFood`). */
+export const HIGH_RISK_EXTRA_DAYS = 1;
+
+/**
+ * The "use soon" window for one item: the household setting, plus a day for high-risk food
+ * outside the freezer. The one place this rule lives (Larder, Add review, merge checks, push).
+ *
+ * The extra day applies to a printed date (3 days left on raw salmon is worth a nudge), but not
+ * to an estimate that is already that short: raw mince is estimated at 2 days, so the base
+ * window already flags it, and the extra would only mark 3-day leftovers "use soon" the moment
+ * they go in the fridge.
+ */
+export function soonDaysFor(
+  item: Pick<PantryItem, "name" | "printedDate">,
+  opts: { food?: FoodType; override?: ShelfLifeOverride; location?: Pick<StorageLocation, "kind">; useSoonDays: number },
+): number {
+  const kind = opts.location?.kind ?? "fridge";
+  const base = opts.useSoonDays;
+  if (kind === "freezer" || !isHighRiskFood(item, opts.food)) return base;
+  if (item.printedDate) return base + HIGH_RISK_EXTRA_DAYS;
+  return storageDays(opts.food, opts.override, kind, item.name) > base + HIGH_RISK_EXTRA_DAYS ? base + HIGH_RISK_EXTRA_DAYS : base;
 }
 
 export interface UnknownDefaults {
@@ -46,10 +95,10 @@ export function defaultsForUnknown(name: string): UnknownDefaults {
     : { locationId: "fridge", days: FALLBACK_DAYS.fridge, dateKind: "best-before", highRisk, basis: "Cautious estimate for the fridge" };
 }
 
-/** Days for an unmatched food in a given kind of spot. */
+/** Days for an unmatched food in a given kind of spot. Raw meat or fish left out: use it today. */
 function unknownDays(name: string, kind: StorageKind): number {
   if (kind === "freezer") return FALLBACK_DAYS.freezer;
-  if (isHighRisk(name)) return HIGH_RISK_DAYS;
+  if (isHighRisk(name)) return kind === "pantry" ? 0 : HIGH_RISK_DAYS;
   return FALLBACK_DAYS[kind];
 }
 
@@ -83,7 +132,9 @@ export function storageWarning(food: FoodType | undefined, kind: StorageKind): s
 
 /**
  * Days a food lasts in a kind of spot, never null: the table/override value when there is one,
- * otherwise a safe stand-in (shortest pantry/fridge life, 30 days frozen, or the unknown-food default).
+ * otherwise a safe short stand-in (at most 3 days in the fridge, 1 in the pantry, 30 frozen, or the
+ * unknown-food default). A spot the food isn't suited to never borrows another spot's long life:
+ * cooked lentils in the fridge must not get dried lentils' two years.
  */
 export function storageDays(
   food: FoodType | undefined,
@@ -95,8 +146,27 @@ export function storageDays(
   const days = effectiveDays(food, override, kind);
   if (days !== null) return days;
   if (kind === "freezer") return FREEZER_NOT_RECOMMENDED_DAYS;
-  const better = food ? betterSpot(food, kind) : undefined;
-  return better?.days ?? FALLBACK_DAYS.fridge;
+  const better = betterSpot(food, kind);
+  // Chilling a shelf-stable food (a tin, a jar of sauce) doesn't shorten its life, unless the name
+  // says it's really raw fish or meat ("tuna" in the fridge is a steak, not a tin).
+  if (kind === "fridge" && better?.kind === "pantry" && better.days >= SHELF_STABLE_DAYS && !isHighRisk(name)) return better.days;
+  if (kind === "fridge" && isHighRisk(name)) return HIGH_RISK_DAYS;
+  return Math.min(UNSUITED_DAYS[kind], better?.days ?? UNSUITED_DAYS[kind]);
+}
+
+/** Pantry life from which a food counts as shelf-stable (tins, jars, dry goods, long-life). */
+const SHELF_STABLE_DAYS = 60;
+
+/**
+ * How long a food keeps unopened wherever it does best (the longer of its pantry and fridge
+ * life), used to cap the opened clock. Falls back to the current spot for unknown foods.
+ */
+function unopenedDays(food: FoodType | undefined, override: ShelfLifeOverride | undefined, kind: StorageKind, name: string): number {
+  if (!food) return storageDays(food, override, kind, name);
+  const own = effectiveDays(food, override, kind === "freezer" ? "fridge" : kind);
+  if (own !== null) return own;
+  const options = (["pantry", "fridge"] as const).map((k) => effectiveDays(food, override, k)).filter((d): d is number => d !== null);
+  return options.length ? Math.max(...options) : storageDays(food, override, kind, name);
 }
 
 export interface ExpiryInfo {
@@ -197,11 +267,17 @@ export function computeExpiry(
     const openDays = effectiveDays(food, override, "opened") ?? days(kind);
     expiresOn = addDays(startOfDay(opened), openDays);
     basis = `Opened ${relativeDay(opened, now)}`;
-    // An opened item never outlasts its printed use-by date.
-    if (printed && item.dateKind === "use-by" && printed < expiresOn) {
-      expiresOn = printed;
-      estimated = false;
-      basis = "Printed use-by date";
+    // Opening only ever shortens the clock: an opened item never outlasts the date it had
+    // unopened, printed or estimated. (Opening spoiled milk must not make it fresh again.)
+    const unopened = printed ?? addDays(startOfDay(new Date(item.addedAt)), unopenedDays(food, override, kind, item.name));
+    if (unopened < expiresOn) {
+      expiresOn = unopened;
+      if (printed) {
+        estimated = false;
+        basis = item.dateKind === "use-by" ? "Printed use-by date" : "Printed best-before date";
+      } else {
+        basis += ". It was already close to its date";
+      }
     }
   } else if (printed) {
     expiresOn = printed;
@@ -252,9 +328,18 @@ export function relativeDay(d: Date, now: Date = new Date()): string {
   const diff = daysBetween(d, now);
   if (diff === 0) return "today";
   if (diff === 1) return "yesterday";
-  if (diff > 1) return `${diff} days ago`;
+  if (diff > 1) return `${spanAgo(diff)} ago`;
   if (diff === -1) return "tomorrow";
   return `in ${-diff} days`;
+}
+
+/** "3 days", "about 2 weeks", "about 5 months", "about a year", "about 7 years", for a span in the past. */
+function spanAgo(days: number): string {
+  if (days < 14) return `${days} days`;
+  if (days < 60) return `about ${Math.round(days / 7)} weeks`;
+  if (days < 330) return `about ${Math.round(days / 30)} months`;
+  const years = Math.round(days / 365);
+  return years <= 1 ? "about a year" : `about ${years} years`;
 }
 
 /** Human label for how long is left, honest about best-before vs use-by. */
@@ -263,16 +348,26 @@ export function describeDaysLeft(info: ExpiryInfo, dateKind: PantryItem["dateKin
   const est = info.estimated ? "about " : "";
   if (!Number.isFinite(d)) return "Check the date";
   if (d < 0) {
-    const ago = -d === 1 ? "yesterday" : `${-d} days ago`;
+    const ago = -d === 1 ? "yesterday" : `${spanAgo(-d)} ago`;
     return dateKind === "best-before" ? `Past best before (${ago})` : `Likely spoiled (${ago})`;
   }
   if (d === 0) return "Use today";
   if (d === 1) return "Use by tomorrow";
   if (d < 14) return `${est}${d} days left`;
   if (d < 60) return `${est}${Math.round(d / 7)} weeks left`;
-  if (d < 365) return `${est}${Math.round(d / 30)} months left`;
+  if (d < 330) return `${est}${Math.round(d / 30)} months left`;
+  // A year or more out is always approximate, printed or not.
   const years = Math.round(d / 365);
-  return `${est}${years} year${years === 1 ? "" : "s"} left`;
+  return years <= 1 ? "about a year left" : `about ${years} years left`;
+}
+
+/**
+ * Label for the date an item is tracked against. Frozen food is about quality, not safety, so
+ * the freezer always says "Best quality by"; elsewhere it follows the printed kind.
+ */
+export function dateLabel(dateKind: DateKind, kind?: StorageKind, opts?: { thawed?: boolean }): string {
+  if (kind === "freezer" && !opts?.thawed) return "Best quality by";
+  return dateKind === "use-by" ? "Use by" : "Best before";
 }
 
 export const STATUS_ORDER: Record<ItemStatus, number> = {

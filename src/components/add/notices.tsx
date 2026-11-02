@@ -13,9 +13,9 @@ export function AiUnavailable({ what }: { what: "receipt" | "list" | "shelf" }) 
           <Sparkles size={18} />
         </span>
         <div>
-          <p className="font-semibold text-ink">Photo reading isn’t switched on here yet</p>
+          <p className="font-semibold text-ink">Photo reading isn’t available yet</p>
           <p className="mt-1 text-[15px] text-ink-2">
-            Reading {what === "receipt" ? "receipts" : what === "shelf" ? "photos of your shelves" : "photos of lists"} needs an AI key on the server. You can still get
+            Reading {what === "receipt" ? "receipts" : what === "shelf" ? "photos of your shelves" : "photos of lists"} isn’t available yet. You can still get
             everything in quickly another way.
           </p>
         </div>

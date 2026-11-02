@@ -22,6 +22,10 @@ const PLURAL: Partial<Record<Unit, string>> = {
   jar: "jars",
   bottle: "bottles",
   dozen: "dozen",
+  bag: "bags",
+  punnet: "punnets",
+  tub: "tubs",
+  tray: "trays",
 };
 
 /** Trim to at most 2 decimals without trailing zeros: 1.5 → "1.5", 1.25 → "1.25", 2 → "2". */
@@ -31,9 +35,11 @@ function trimDecimals(q: number): string {
 
 /**
  * "×2", "500 g", "1.2 kg", "1 L", "2 tins", "½ loaf".
- * Folds large metric amounts: 1000 g or more shows as kg, 1000 ml or more as L.
+ * Folds large metric amounts: 1000 g or more shows as kg, 1000 ml or more as L; and less than
+ * a kilo or litre the other way (0.06 kg shows as 60 g, 0.25 L as 250 ml).
  */
 export function formatQuantity(q: number, unit: Unit): string {
+  if ((unit === "kg" || unit === "L") && q > 0 && q < 1) return `${Math.round(q * 1000)} ${unit === "kg" ? "g" : "ml"}`;
   if (unit === "g" && q >= 1000) return `${trimDecimals(q / 1000)} kg`;
   if (unit === "ml" && q >= 1000) return `${trimDecimals(q / 1000)} L`;
   if (unit === "g" || unit === "ml") return `${trimDecimals(q)} ${unit}`;
@@ -93,24 +99,33 @@ export interface WasteTotals {
   usedPriced: boolean;
 }
 
+/**
+ * Used vs binned in a period, counted by item, not by event: milk used over four breakfasts is
+ * one item eaten, and an item that was partly eaten and then binned counts as binned.
+ * Dollar values add up every event's share of the price the household paid (or typed in).
+ */
 export function wasteTotals(events: ItemEvent[], since?: Date): WasteTotals {
   const t: WasteTotals = { used: 0, binned: 0, usedValue: 0, binnedValue: 0, binnedPriced: false, usedPriced: false };
+  const outcome = new Map<string, "used" | "binned">();
   for (const e of events) {
     if (since && new Date(e.at) < since) continue;
     if (e.type === "used") {
-      t.used++;
+      if (!outcome.has(e.itemId)) outcome.set(e.itemId, "used");
       if (e.value !== undefined) {
         t.usedValue += e.value;
         t.usedPriced = true;
       }
     } else if (e.type === "binned") {
-      t.binned++;
+      outcome.set(e.itemId, "binned");
       if (e.value !== undefined) {
         t.binnedValue += e.value;
         t.binnedPriced = true;
       }
     }
   }
+  for (const o of outcome.values()) t[o]++;
+  t.usedValue = Math.round(t.usedValue * 100) / 100;
+  t.binnedValue = Math.round(t.binnedValue * 100) / 100;
   return t;
 }
 

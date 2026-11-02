@@ -35,6 +35,7 @@ const {
   offProductToResponse,
   withLastAdded,
   findMergeTarget,
+  checkPrintedDate,
 } = await import("./drafts");
 const { defaultsForUnknown } = await import("./shelf-life/engine");
 
@@ -117,7 +118,7 @@ describe("resolveQuantity", () => {
 describe("lineToDraft", () => {
   it("matches known foods with emoji, location and date kind", () => {
     const d = lineToDraft(parseLine("2 x milk 2L")!);
-    expect(d).toMatchObject({ foodTypeId: "milk", emoji: "🥛", locationId: "fridge", dateKind: "use-by", quantity: 4, unit: "L", include: true, isFood: true });
+    expect(d).toMatchObject({ foodTypeId: "milk", emoji: "🥛", locationId: "fridge", dateKind: "use-by", quantity: 2, unit: "L", packs: 2, include: true, isFood: true });
   });
   it("gives unknown foods sensible defaults and low confidence", () => {
     const d = lineToDraft({ name: "DRAGON FRUIT JAM" });
@@ -210,7 +211,7 @@ View in browser | Unsubscribe | Privacy`;
     expect(names.join(" ")).not.toMatch(/Raspberr|Subtotal|Delivery|Thanks|Order number/i);
 
     const drafts = r.lines.map(lineToDraft);
-    expect(drafts[0]).toMatchObject({ foodTypeId: "milk", quantity: 4, unit: "L", price: 6.2 });
+    expect(drafts[0]).toMatchObject({ foodTypeId: "milk", quantity: 2, unit: "L", packs: 2, price: 6.2 });
     expect(drafts[1]).toMatchObject({ foodTypeId: "eggs" });
     expect(drafts[3]).toMatchObject({ include: false, isFood: false });
   });
@@ -258,7 +259,7 @@ describe("parser fixes from review", () => {
     const r = parseLocalList("Beef mince 1kg\n2 x $13.00 / $26.00");
     expect(r.lines).toHaveLength(1);
     expect(r.lines[0]).toMatchObject({ count: 2, price: 26, size: { quantity: 1, unit: "kg" } });
-    expect(lineToDraft(r.lines[0])).toMatchObject({ foodTypeId: "beef-mince", quantity: 2000, unit: "g", price: 26 });
+    expect(lineToDraft(r.lines[0])).toMatchObject({ foodTypeId: "beef-mince", quantity: 1000, unit: "g", packs: 2, price: 26 });
   });
 
   it("reads a multi-buy on the same line", () => {
@@ -326,7 +327,7 @@ describe("parser fixes from review", () => {
   it("puts unknown raw meat in the fridge with a short use-by", () => {
     const d = lineToDraft(parseLine("venison sausages 500g")!);
     expect(d).toMatchObject({ foodTypeId: null, locationId: "fridge", dateKind: "use-by", quantity: 500, unit: "g" });
-    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 3 });
+    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 2 });
     // Other unknown foods also go to the fridge, but with a gentler estimate.
     expect(lineToDraft({ name: "Dragon fruit jam" })).toMatchObject({ locationId: "fridge", dateKind: "best-before" });
   });
@@ -376,5 +377,91 @@ describe("smart defaults and duplicates", () => {
     expect(findMergeTarget(draft, [item({ printedDate: "2026-11-02" })])).toBeUndefined();
     expect(findMergeTarget({ ...draft, unit: "ml" }, [item({})])?.id).toBe("a");
     expect(findMergeTarget({ ...draft, unit: "item" }, [item({})])).toBeUndefined();
+  });
+});
+
+describe("audit fixes: amounts, packaging and packs", () => {
+  it("reads 12 eggs as a dozen, not 12 dozen", () => {
+    expect(lineToDraft(parseLine("12 eggs")!)).toMatchObject({ foodTypeId: "eggs", quantity: 1, unit: "dozen" });
+    expect(lineToDraft(parseLine("10 eggs")!)).toMatchObject({ foodTypeId: "eggs", quantity: 10, unit: "item" });
+    expect(lineToDraft(parseLine("2x eggs")!)).toMatchObject({ foodTypeId: "eggs", quantity: 2, unit: "dozen" });
+  });
+
+  it("reads a bare trailing count", () => {
+    expect(parseLine("bananas 6")).toMatchObject({ name: "bananas", count: 6 });
+    expect(lineToDraft(parseLine("bananas 6")!)).toMatchObject({ foodTypeId: "banana", quantity: 6, unit: "item" });
+    expect(parseLine("milk 2L")).toMatchObject({ name: "milk", size: { quantity: 2, unit: "L" } });
+    expect(parseLine("milk 2L")?.count).toBeUndefined();
+  });
+
+  it("drops packaging words and keeps them as the unit when there's no size", () => {
+    expect(parseLine("carrots 1kg bag")).toMatchObject({ name: "carrots", size: { quantity: 1, unit: "kg" } });
+    expect(parseLine("punnet of raspberries")).toMatchObject({ name: "raspberries", pack: "punnet" });
+    expect(parseLine("2 punnets raspberries")).toMatchObject({ name: "raspberries", count: 2, pack: "punnet" });
+    expect(lineToDraft(parseLine("bag of tomatoes")!)).toMatchObject({ foodTypeId: "tomato", quantity: 1, unit: "bag" });
+    expect(lineToDraft(parseLine("tub of mystery dip")!)).toMatchObject({ foodTypeId: null, quantity: 1, unit: "tub" });
+    // The bag is the product.
+    expect(parseLine("reusable bag")?.name).toBe("reusable bag");
+    expect(parseLine("freezer bags")?.name).toBe("freezer bags");
+    expect(isLikelyNonFood(parseLine("carrots 1kg bag")!.name)).toBe(false);
+  });
+
+  it("attaches a size-only line in an order email to the product above", () => {
+    const r = parseLocalList("Coles Chicken Breast Fillets Large Pack per kg\n1.2kg\n$13.08");
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toMatchObject({ size: { quantity: 1.2, unit: "kg" }, price: 13.08 });
+    expect(r.lines[0].name).not.toMatch(/per kg|pack/i);
+  });
+
+  it("splits measured multi-packs into separate packs", () => {
+    expect(lineToDraft(parseLine("2x beef mince 500g")!)).toMatchObject({ foodTypeId: "beef-mince", quantity: 500, unit: "g", packs: 2 });
+    // Counted packs stay one line.
+    expect(lineToDraft(parseLine("3x diced tomatoes")!).packs).toBeUndefined();
+  });
+
+  it("leaves weak partial matches unticked", () => {
+    expect(lineToDraft({ name: "ging" })).toMatchObject({ foodTypeId: "ginger", confidence: "medium", include: false });
+    expect(lineToDraft({ name: "milk" }).include).toBe(true);
+    expect(lineToDraft({ name: "LOL" }).foodTypeId).toBeNull();
+  });
+});
+
+describe("checkPrintedDate", () => {
+  const now = new Date(2026, 10, 2, 12);
+  it("flags dates far ahead or long past", () => {
+    expect(checkPrintedDate("2026-11-20", now)).toBe("ok");
+    expect(checkPrintedDate("2028-06-01", now)).toBe("ok");
+    expect(checkPrintedDate("2062-03-04", now)).toBe("far-future");
+    expect(checkPrintedDate("2019-05-01", now)).toBe("far-past");
+    expect(checkPrintedDate(undefined, now)).toBe("ok");
+  });
+});
+
+describe("findMergeTarget with a freshness check", () => {
+  const now = new Date(2026, 10, 2, 12);
+  const daysAgo = (n: number) => new Date(2026, 10, 2 - n, 9).toISOString();
+  const item = (over: Partial<PantryItem>): PantryItem => ({
+    id: "a",
+    name: "Milk",
+    foodTypeId: "milk",
+    emoji: "🥛",
+    locationId: "fridge",
+    quantity: 1,
+    initialQuantity: 1,
+    unit: "L",
+    addedAt: daysAgo(0),
+    dateKind: "use-by",
+    source: "manual",
+    ...over,
+  });
+  const ctx = { locations: [{ id: "fridge", name: "Fridge", kind: "fridge" as const }], now };
+  const draft = { foodTypeId: "milk", locationId: "fridge", unit: "L" as const, printedDate: undefined };
+  it("never tops up an item that is old, due soon or past its date", () => {
+    expect(findMergeTarget(draft, [item({})], ctx)?.id).toBe("a");
+    expect(findMergeTarget(draft, [item({ addedAt: daysAgo(3) })], ctx)).toBeUndefined();
+    expect(findMergeTarget(draft, [item({ addedAt: daysAgo(10) })], ctx)).toBeUndefined();
+    // Same printed date and still fresh: same batch, fine to top up.
+    expect(findMergeTarget({ ...draft, printedDate: "2026-11-20" }, [item({ addedAt: daysAgo(3), printedDate: "2026-11-20" })], ctx)?.id).toBe("a");
+    expect(findMergeTarget({ ...draft, printedDate: "2026-11-03" }, [item({ printedDate: "2026-11-03" })], ctx)).toBeUndefined();
   });
 });

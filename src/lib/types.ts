@@ -71,7 +71,7 @@ export interface FoodType {
   tip?: string;
 }
 
-export type Unit = "item" | "g" | "kg" | "ml" | "L" | "pack" | "bunch" | "dozen" | "loaf" | "tin" | "jar" | "bottle";
+export type Unit = "item" | "g" | "kg" | "ml" | "L" | "pack" | "bunch" | "dozen" | "loaf" | "tin" | "jar" | "bottle" | "bag" | "punnet" | "tub" | "tray";
 
 export type ItemStatus = "fresh" | "use-soon" | "use-today" | "expired";
 
@@ -100,7 +100,7 @@ export interface PantryItem {
    */
   expiredWhenFrozen?: boolean;
   /** Where the item came from. */
-  source: "receipt" | "list" | "barcode" | "manual" | "order";
+  source: "receipt" | "list" | "barcode" | "manual" | "order" | "putaway";
   barcode?: string;
   notes?: string;
 }
@@ -142,6 +142,8 @@ export interface HouseholdProfile {
   allergies: string[];
   likes: string[];
   dislikes: string[];
+  /** Set once the household has answered (or skipped) "Cooking for how many?" on Recipes. */
+  confirmed?: boolean;
 }
 
 export interface RecipeIngredient {
@@ -189,6 +191,8 @@ export interface Recipe {
   savedAt?: string;
   /** Tablespoon size the recipe was written with. Australian recipes use 20 ml; most others 15 ml. */
   tbspMl?: 15 | 20;
+  /** The source didn't say how many it serves, so `servings` is our guess. */
+  servingsEstimated?: boolean;
 }
 
 export interface ShoppingListItem {
@@ -203,13 +207,32 @@ export interface ShoppingListItem {
   /** Why it is on the list. */
   reason?: "manual" | "recipe" | "staple" | "plan";
   recipeId?: string;
+  /** Extra detail, e.g. the recipe's own amount ("6 slices for French toast"). */
+  note?: string;
+}
+
+/**
+ * A food the household always wants in stock ("Always keep in stock" on the item sheet).
+ * Matched to larder items by food type, or by name when there is none.
+ */
+export interface Staple {
+  id: string;
+  name: string;
+  foodTypeId: string | null;
+  emoji?: string;
+  addedAt: string;
 }
 
 export interface MealPlanEntry {
   id: string;
   date: string; // ISO date
   recipeId: string;
+  /** How many this meal is for. The recipe itself is never changed to match. */
   servings?: number;
+  /** When it was cooked (from "I cooked this"). */
+  cookedAt?: string;
+  /** A copy of a recipe that isn't built in or saved (an AI idea), so the plan can still open it. */
+  recipe?: Recipe;
 }
 
 export interface Settings {
@@ -221,6 +244,8 @@ export interface Settings {
   useSoonDays: number;
   mealPlannerEnabled: boolean;
   onboarded: boolean;
+  /** When the weekly "Fridge check" on Today was last done (ISO date-time). */
+  fridgeCheckAt?: string;
 }
 
 /** A line read from a receipt, list, order or barcode, awaiting review. */
@@ -238,4 +263,19 @@ export interface DraftItem {
   dateKind: DateKind;
   include: boolean;
   confidence?: "high" | "medium" | "low";
+  /** Product barcode this line came from (barcode scans), saved on the item and remembered. */
+  barcode?: string;
+  /** Separate packs of `quantity` each ("2x milk 2L" is 2 packs of 2 L); added as that many items. */
+  packs?: number;
+}
+
+/** What a household told us a barcode is, so the next scan of it needs no lookup or matching. */
+export interface BarcodeMemory {
+  foodTypeId: string | null;
+  name: string;
+  emoji: string;
+  unit: Unit;
+  quantity: number;
+  /** ISO date-time it was last saved. */
+  at: string;
 }
