@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
-const { bearerMatches, sendPush } = await import("./server");
+const { bearerMatches, cleanEnv, sendPush } = await import("./server");
 
 describe("push sender guards", () => {
   it("checks the cron secret", () => {
@@ -17,5 +17,13 @@ describe("push sender guards", () => {
     const cfg = { supabaseUrl: "", serviceKey: "", vapidPublic: "", vapidPrivate: "", vapidSubject: "" };
     const row = { endpoint: "https://169.254.169.254/latest/meta-data", p256dh: "x", auth: "y" };
     expect(await sendPush(cfg, row, { title: "t", body: "b", url: "/", tag: "x" })).toBe("gone");
+  });
+});
+
+describe("cleanEnv", () => {
+  it("strips pasted whitespace and quotes", () => {
+    expect(cleanEnv('  "abc-DEF_123"\n')).toBe("abc-DEF_123");
+    expect(cleanEnv("'mailto:a@b.com' ")).toBe("mailto:a@b.com");
+    expect(cleanEnv("plain")).toBe("plain");
   });
 });

@@ -1,4 +1,4 @@
-import { adminClient, claimTestSend, digestPayload, householdRows, pushConfig, scheduleOf, sendPush, TEST_COOLDOWN_SECONDS } from "@/lib/push/server";
+import { adminClient, claimTestSend, digestPayload, householdRows, pushConfig, scheduleOf, lastSendError, sendPush, TEST_COOLDOWN_SECONDS } from "@/lib/push/server";
 import { householdDigest } from "@/lib/push/digest";
 
 function error(status: number, code: string, message: string) {
@@ -61,6 +61,20 @@ export async function POST(request: Request) {
     await db.from("push_subscriptions").delete().eq("id", sub.id);
     return error(410, "gone", "This device stopped accepting notifications. Turn reminders off and on again.");
   }
-  if (result === "failed") return error(502, "failed", "Couldn't reach this device's notification service. Try again in a minute.");
+  if (result === "failed") {
+    const why = lastSendError;
+    // A 401/403 from the push service, or a key error, means the server's VAPID setup is wrong, not the device.
+    const config = !why?.status || why.status === 401 || why.status === 403;
+    return Response.json(
+      {
+        error: "failed",
+        message: config
+          ? `The reminder server's notification keys don't look right${why?.status ? ` (push service said ${why.status})` : ""}. Check the VAPID settings.`
+          : "Couldn't reach this device's notification service. Try again in a minute.",
+        detail: why,
+      },
+      { status: 502 },
+    );
+  }
   return Response.json({ ok: true });
 }
