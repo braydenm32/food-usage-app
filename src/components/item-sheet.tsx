@@ -1,44 +1,35 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CircleAlert, Lightbulb, PackageOpen, Snowflake, Trash2, X } from "lucide-react";
+import { CheckCheck, CircleAlert, Lightbulb, PackageOpen, Snowflake, Trash2, X } from "lucide-react";
 import { useLarder } from "@/lib/store";
-import { useItemView, type ItemView } from "@/lib/selectors";
-import {
-  daysBetween,
-  describeDaysLeft,
-  effectiveDays,
-  freezerNotRecommended,
-  isPastDateForFreezing,
-  parseLocalDate,
-  storageWarning,
-} from "@/lib/shelf-life/engine";
-import type { DateKind, ShelfLifeOverride } from "@/lib/types";
-import { Button, Chip, Input, Segmented, Sheet, Stepper, cx } from "@/components/ui";
+import { useIsStaple, useItemView, type ItemView } from "@/lib/selectors";
+import { describeDaysLeft, freezerNotRecommended, isPastDateForFreezing, storageWarning } from "@/lib/shelf-life/engine";
+import type { DateKind, PantryItem } from "@/lib/types";
+import { Button, Chip, Input, Segmented, Sheet, Stepper, Switch, cx } from "@/components/ui";
 import { StatusPill } from "@/components/freshness";
+import { formatAUD, formatQuantity, formatShortDate, shareLeft, describeShareLeft } from "@/components/pantry/format";
 import {
-  formatAUD,
-  formatAmount,
-  formatQuantity,
-  formatShortDate,
-  shareLeft,
-  describeShareLeft,
-} from "@/components/pantry/format";
-import { capitalise, markBinned, markOpened, markUsed, moveTo, removeItem } from "@/components/pantry/actions";
-import { OverflowMenu } from "@/components/pantry/overflow-menu";
+  canFreeze,
+  capitalise,
+  eatOne,
+  freezeItem,
+  markBinned,
+  markOpened,
+  markSomeUsed,
+  markUsed,
+  moveTo,
+  oneLabel,
+  primaryUse,
+  removeItem,
+} from "@/components/pantry/actions";
+import { OverflowMenu, type MenuAction } from "@/components/pantry/overflow-menu";
 import { LocationIcon } from "@/components/pantry/location-icon";
+import { DateCheck, needsDateCheck, rememberDays, rememberOfferFor, type RememberOffer } from "@/components/pantry/date-check";
 import { toast } from "@/components/toast";
 
-type DaysColumn = "pantryDays" | "fridgeDays";
+/** "edit-date" focuses the date field. "still-good" is kept for older links: it now shows the quick date check. */
 export type SheetIntent = "still-good" | "edit-date";
-
-interface RememberOffer {
-  column: DaysColumn;
-  days: number;
-  foodTypeId: string;
-  /** "baby spinach in the fridge" / "milk once opened" */
-  phrase: string;
-}
 
 const PARTS = [
   { f: 0.25, label: "¼ left" },
@@ -55,8 +46,52 @@ function stepFor(unit: string, quantity: number) {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Details and actions for one item. Pass `intent="still-good"` to lead with setting a new
- * date (used by "Still good" on the Today screen), or `"edit-date"` to just focus the date.
+ * Show big gram and millilitre amounts folded ("1 kg", not "1000 g") in steppers: the stepper
+ * works in kg or L and the store keeps the item's own unit.
+ */
+export function foldedUnit(unit: PantryItem["unit"], quantity: number): { factor: number; suffix?: string; step?: number } {
+  if (unit === "g" && quantity >= 1000) return { factor: 1000, suffix: "kg", step: 0.1 };
+  if (unit === "ml" && quantity >= 1000) return { factor: 1000, suffix: "L", step: 0.1 };
+  return { factor: 1, suffix: unit === "item" ? undefined : unit };
+}
+
+/** A stepper for an amount in the item's unit, folded to kg or L when large. */
+function AmountStepper({
+  label,
+  unit,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  unit: PantryItem["unit"];
+  value: number;
+  min: number;
+  max?: number;
+  onChange: (v: number) => void;
+}) {
+  const f = foldedUnit(unit, Math.max(value, max ?? 0));
+  const step = f.step ?? stepFor(unit, value);
+  return (
+    <Stepper
+      label={label}
+      value={round2(value / f.factor)}
+      step={step}
+      min={round2(Math.min(min, value) / f.factor)}
+      suffix={f.suffix}
+      onChange={(v) => {
+        const q = f.factor === 1 ? v : Math.round(v * f.factor);
+        onChange(max !== undefined ? Math.min(q, max) : q);
+      }}
+    />
+  );
+}
+
+/**
+ * Details and actions for one item. Pass `intent="edit-date"` to focus the date. Raw meat, fish
+ * and leftovers near their estimate, and best-before food past its date, lead with a quick
+ * "Is it still within date?" check.
  */
 export function ItemSheet({
   itemId,
@@ -82,9 +117,23 @@ export function ItemSheet({
       open={isOpen}
       onClose={onClose}
       title={view?.item.name ?? ""}
-      footer={view && <Footer view={view} onClose={onClose} />}
+      footer={
+        view && (
+          // On a landscape phone the sticky footer would eat the screen: it moves into the scroll area.
+          <div className="[@media(max-height:500px)]:hidden">
+            <Footer view={view} onClose={onClose} />
+          </div>
+        )
+      }
     >
-      {view && <Body key={view.item.id} view={view} intent={intent} />}
+      {view && (
+        <>
+          <Body key={view.item.id} view={view} intent={intent} />
+          <div className="mt-6 hidden border-t border-line pt-3 [@media(max-height:500px)]:block">
+            <Footer view={view} onClose={onClose} compact />
+          </div>
+        </>
+      )}
     </Sheet>
   );
 }
@@ -98,9 +147,11 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
   const overrides = useLarder((s) => s.overrides);
   const updateItem = useLarder((s) => s.updateItem);
   const consumeItem = useLarder((s) => s.consumeItem);
-  const setOverride = useLarder((s) => s.setOverride);
+  const setStaple = useLarder((s) => s.setStaple);
+  const staple = useIsStaple(item);
 
   const [name, setName] = useState(item.name);
+  const [price, setPrice] = useState(item.price !== undefined ? item.price.toFixed(2) : "");
   const [offer, setOffer] = useState<RememberOffer | null>(null);
   // "Move some": countable items with more than one can be split between spots.
   const countable = ["item", "pack", "tin", "jar", "bottle", "loaf", "bunch"].includes(item.unit) && item.quantity >= 2 && Number.isInteger(item.quantity);
@@ -113,19 +164,35 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
   const dateRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (intent) dateRef.current?.focus({ preventScroll: false });
+    if (intent === "edit-date") dateRef.current?.focus({ preventScroll: false });
   }, [intent]);
 
   const kind = location?.kind ?? "fridge";
   const frozen = kind === "freezer";
-  const step = stepFor(item.unit, item.quantity);
   const share = shareLeft(item.quantity, item.initialQuantity);
   const leftWords = describeShareLeft(item.quantity, item.initialQuantity);
+  const check = needsDateCheck(view);
 
   const commitName = () => {
     const next = name.trim();
     if (!next) setName(item.name);
     else if (next !== item.name) updateItem(item.id, { name: next });
+  };
+
+  const commitPrice = () => {
+    const raw = price.replace(/[$,\s]/g, "");
+    if (raw === "") {
+      if (item.price !== undefined) updateItem(item.id, { price: undefined });
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      setPrice(item.price !== undefined ? item.price.toFixed(2) : "");
+      return;
+    }
+    const value = Math.round(n * 100) / 100;
+    setPrice(value.toFixed(2));
+    if (value !== item.price) updateItem(item.id, { price: value });
   };
 
   const setQuantity = (q: number) =>
@@ -147,28 +214,19 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
       setOffer(null);
       return;
     }
-    const wasEstimate = expiry.estimated;
+    const next = rememberOfferFor(view, value, overrides);
     updateItem(item.id, { printedDate: value });
-    // Only learn from a sealed item in the pantry or fridge: when it is frozen, thawed or
-    // opened, that clock decides the date, not the one on the pack.
-    if (!wasEstimate || !food || frozen || item.thawedAt || item.openedAt) return setOffer(null);
-
-    const column = `${kind}Days` as DaysColumn;
-    const phrase = `${food.name.toLowerCase()} in the ${kind}`;
-    const days = daysBetween(new Date(item.addedAt), parseLocalDate(value));
-    const current = effectiveDays(food, overrides[food.id], kind as "pantry" | "fridge");
-    if (days < 1 || days === current) return setOffer(null);
-    setOffer({ column, days, foodTypeId: food.id, phrase });
+    setOffer(next);
   };
 
   const remember = () => {
     if (!offer) return;
-    setOverride({ foodTypeId: offer.foodTypeId, [offer.column]: offer.days } as ShelfLifeOverride);
-    notify(`Got it. ${offer.days} days for ${offer.phrase} from now on.`, false);
+    rememberDays(offer);
     setOffer(null);
   };
 
-  const dateLabel = item.dateKind === "use-by" ? "Use by" : "Best before";
+  // Freezer dates are about quality, not safety.
+  const dateLabel = frozen ? "Best quality by" : item.dateKind === "use-by" ? "Use by" : "Best before";
 
   // Storage advice for where it is now, shown once (not repeated in the basis line).
   const spotWarning = item.expiredWhenFrozen ? undefined : storageWarning(food, kind);
@@ -198,29 +256,31 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
           {item.emoji}
         </span>
         <div className="flex min-w-0 flex-col items-start gap-1.5">
-          <StatusPill status={expiry.status} />
+          <StatusPill status={expiry.status}>{frozen && expiry.status === "fresh" ? "Frozen" : undefined}</StatusPill>
           <p className="text-[17px] font-semibold text-ink">{capitalise(describeDaysLeft(expiry, item.dateKind))}</p>
           <p className="text-sm text-ink-2">
             {formatQuantity(item.quantity, item.unit)}
             {leftWords && `, ${leftWords}`}
             {location && ` · ${location.name}`}
+            {frozen && item.frozenAt && ` · Frozen ${formatShortDate(new Date(item.frozenAt))}`}
             {item.openedAt && " · Opened"}
           </p>
         </div>
       </div>
 
-      {intent !== "still-good" && item.dateKind === "best-before" && expiry.status === "expired" && !expiry.estimated && (
-        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
-          Best before is about quality, not safety. If it looks, smells and tastes fine it&apos;s usually good to eat, so
-          check before you bin it.
-        </p>
-      )}
-
-      {intent === "still-good" && (
-        <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
-          Still looks and smells fine? Set the date on the pack, or a new date you&apos;re comfortable with. Trust your
-          senses with best-before food; use-by dates are about safety.
-        </p>
+      {check ? (
+        <div className="rounded-2xl bg-surface-2 px-4 py-3">
+          <DateCheck view={view} kind={check} />
+        </div>
+      ) : (
+        item.dateKind === "best-before" &&
+        expiry.status === "expired" &&
+        !expiry.estimated && (
+          <p className="rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
+            Best before is about quality, not safety. If it looks, smells and tastes fine it&apos;s usually good to eat, so
+            check before you bin it.
+          </p>
+        )
       )}
 
       {/* Date */}
@@ -285,9 +345,11 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
             </p>
           )}
           <p className="text-xs text-ink-3">
-            {item.dateKind === "use-by"
-              ? "Use-by is about safety: don't eat it after this date."
-              : "Best-before is about quality: often fine after, so look and sniff."}
+            {frozen
+              ? "Frozen food stays safe; this date is about taste and texture."
+              : item.dateKind === "use-by"
+                ? "Use-by is about safety: don't eat it after this date."
+                : "Best-before is about quality: often fine after, so look and sniff."}
           </p>
 
           {offer && (
@@ -310,9 +372,17 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
 
       {/* Location */}
       <section aria-labelledby="sheet-where" className="flex flex-col gap-2">
-        <h3 id="sheet-where" className="text-sm font-medium text-ink-2">
-          Stored in
-        </h3>
+        <div className="flex items-center justify-between gap-3">
+          <h3 id="sheet-where" className="text-sm font-medium text-ink-2">
+            Stored in
+          </h3>
+          {canFreeze(view) && !moving && (
+            <Button size="sm" variant="ghost" className="-mr-2" onClick={() => freezeItem(item.id, notify)}>
+              <Snowflake size={16} aria-hidden />
+              Freeze it
+            </Button>
+          )}
+        </div>
         {locations.length <= 4 ? (
           <Segmented
             label="Stored in"
@@ -396,14 +466,7 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
           How much is left
         </h3>
         <div className="flex flex-wrap items-center gap-2">
-          <Stepper
-            label="Quantity"
-            value={item.quantity}
-            step={step}
-            min={Math.min(step, item.quantity)}
-            onChange={setQuantity}
-            suffix={item.unit === "item" ? undefined : item.unit}
-          />
+          <AmountStepper label="Quantity" unit={item.unit} value={item.quantity} min={stepFor(item.unit, item.quantity)} onChange={setQuantity} />
           <div className="flex gap-1.5">
             {PARTS.map((p) => (
               <Chip
@@ -419,50 +482,82 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
         </div>
       </section>
 
-      {/* Name */}
-      <section className="flex flex-col gap-2">
-        <label htmlFor="sheet-name" className="text-sm font-medium text-ink-2">
-          Name
-        </label>
-        <Input
-          id="sheet-name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={commitName}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-          autoComplete="off"
-        />
-      </section>
+      {/* Name and price */}
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
+        <section className="flex flex-col gap-2">
+          <label htmlFor="sheet-name" className="text-sm font-medium text-ink-2">
+            Name
+          </label>
+          <Input
+            id="sheet-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+            autoComplete="off"
+          />
+        </section>
+        <section className="flex flex-col gap-2">
+          <label htmlFor="sheet-price" className="text-sm font-medium text-ink-2">
+            Price paid
+          </label>
+          <div className="relative">
+            <span aria-hidden className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-3">
+              $
+            </span>
+            <Input
+              id="sheet-price"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              onBlur={commitPrice}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              aria-describedby="sheet-price-hint"
+              autoComplete="off"
+              className="pl-8"
+            />
+          </div>
+          <p id="sheet-price-hint" className="text-xs text-ink-3">
+            {item.price !== undefined && share !== undefined
+              ? `About ${formatAUD(item.price * share)} worth left`
+              : `For all ${formatQuantity(Math.max(item.initialQuantity, item.quantity), item.unit).replace(/^×/, "")}. Counts towards money saved and wasted.`}
+          </p>
+        </section>
+      </div>
 
-      {(food?.tip || item.price !== undefined) && (
-        <div className="flex flex-col gap-3">
-          {food?.tip && (
-            <p className="flex gap-3 rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
-              <Lightbulb size={18} aria-hidden className="mt-0.5 shrink-0 text-soon" />
-              <span>{food.tip}</span>
-            </p>
-          )}
-          {item.price !== undefined && (
-            <p className="text-sm text-ink-2">
-              Paid {formatAUD(item.price)}
-              {share !== undefined && ` · about ${formatAUD(item.price * share)} worth left`}
-            </p>
-          )}
-        </div>
+      <div className="-my-2 border-y border-line">
+        <Switch
+          checked={staple}
+          onChange={(on) => {
+            setStaple({ name: food?.name ?? item.name, foodTypeId: item.foodTypeId, emoji: item.emoji }, on);
+            notify(on ? `We'll remind you to restock ${item.name}` : `${item.name} isn't a staple any more`, false);
+          }}
+          label="Always keep in stock"
+          description="When it runs low, it's suggested for your shopping list."
+        />
+      </div>
+
+      {food?.tip && (
+        <p className="flex gap-3 rounded-2xl bg-surface-2 px-4 py-3 text-sm text-ink-2">
+          <Lightbulb size={18} aria-hidden className="mt-0.5 shrink-0 text-soon" />
+          <span>{food.tip}</span>
+        </p>
       )}
     </div>
   );
 }
 
-function Footer({ view, onClose }: { view: ItemView; onClose: () => void }) {
+function Footer({ view, onClose, compact }: { view: ItemView; onClose: () => void; compact?: boolean }) {
   const { item } = view;
-  const consumeItem = useLarder((s) => s.consumeItem);
   const [some, setSome] = useState(false);
   const half = round2(item.quantity / 2);
   const [amount, setAmount] = useState(half);
-  const step = stepFor(item.unit, item.quantity);
+  const mode = primaryUse(item);
 
   const done = (fn: () => void) => {
     onClose();
@@ -473,37 +568,47 @@ function Footer({ view, onClose }: { view: ItemView; onClose: () => void }) {
     const q = Math.min(amount, item.quantity);
     if (q <= 0) return;
     if (q >= item.quantity) return done(() => markUsed(item.id));
-    consumeItem(item.id, q, "used");
-    notify(`Used ${formatQuantity(q, item.unit)} of ${item.name}`);
+    markSomeUsed(item.id, q, notify);
     setSome(false);
   };
 
+  const toggleSome = () => {
+    setAmount(mode === "one" ? 1 : half);
+    setSome((s) => !s);
+  };
+
+  const more: MenuAction[] = [];
+  if (mode === "one") more.push({ label: "Used some…", onSelect: toggleSome });
+  more.push({ label: "Delete entry", Icon: Trash2, danger: true, onSelect: () => done(() => removeItem(item.id)) });
+
+  const btn = compact ? "h-10" : undefined;
   return (
     <div className="flex flex-col gap-3">
       {some && (
         <div className="flex flex-col gap-3 rounded-2xl bg-surface-2 p-3">
           <p className="text-sm font-medium text-ink">How much did you use?</p>
           <div className="flex flex-wrap items-center gap-2">
-            {[0.25, 0.5, 0.75].map((f) => {
-              const q = round2(item.quantity * f);
-              return (
-                <Chip key={f} selected={amount === q} onClick={() => setAmount(q)}>
-                  {f === 0.25 ? "A quarter" : f === 0.5 ? "Half" : "Most"}
-                </Chip>
-              );
-            })}
-            <Stepper
+            {mode !== "one" &&
+              [0.25, 0.5, 0.75].map((f) => {
+                const q = round2(item.quantity * f);
+                return (
+                  <Chip key={f} selected={amount === q} onClick={() => setAmount(q)}>
+                    {f === 0.25 ? "A quarter" : f === 0.5 ? "Half" : "Most"}
+                  </Chip>
+                );
+              })}
+            <AmountStepper
               label="Amount used"
+              unit={item.unit}
               value={amount}
-              step={step}
-              min={Math.min(step, item.quantity)}
-              onChange={(v) => setAmount(Math.min(v, item.quantity))}
-              suffix={item.unit === "item" ? undefined : item.unit}
+              min={mode === "one" ? 1 : stepFor(item.unit, item.quantity)}
+              max={item.quantity}
+              onChange={setAmount}
             />
           </div>
           <div className="flex gap-2">
             <Button size="sm" onClick={useSome}>
-              Mark {item.unit === "item" ? formatAmount(Math.min(amount, item.quantity)) : formatQuantity(Math.min(amount, item.quantity), item.unit)} used
+              Mark {formatQuantity(Math.min(amount, item.quantity), item.unit).replace(/^×/, "")} used
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setSome(false)}>
               Cancel
@@ -512,35 +617,33 @@ function Footer({ view, onClose }: { view: ItemView; onClose: () => void }) {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <Button className="basis-full whitespace-nowrap sm:basis-auto sm:flex-[1.3]" onClick={() => done(() => markUsed(item.id))}>
-          Used it all
-        </Button>
-        <Button
-          variant="secondary"
-          className={cx("flex-1 whitespace-nowrap", some && "border-primary")}
-          aria-expanded={some}
-          onClick={() => {
-            setAmount(half);
-            setSome((s) => !s);
-          }}
-        >
-          Used some…
-        </Button>
-        <Button variant="secondary" className="flex-1 whitespace-nowrap" onClick={() => done(() => markBinned(item.id))}>
+        {mode === "one" ? (
+          <>
+            <Button className={cx("basis-full whitespace-nowrap sm:basis-auto sm:flex-[1.3]", btn, compact && "basis-auto flex-[1.3]")} onClick={() => eatOne(item.id)}>
+              {oneLabel(item)}
+            </Button>
+            <Button variant="secondary" className={cx("flex-1 whitespace-nowrap", btn)} onClick={() => done(() => markUsed(item.id))}>
+              <CheckCheck size={18} aria-hidden />
+              Used it all
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button className={cx("basis-full whitespace-nowrap sm:basis-auto sm:flex-[1.3]", btn, compact && "basis-auto flex-[1.3]")} onClick={() => done(() => markUsed(item.id))}>
+              <CheckCheck size={18} aria-hidden />
+              Used it all
+            </Button>
+            {mode === "amount" && (
+              <Button variant="secondary" className={cx("flex-1 whitespace-nowrap", btn, some && "border-primary")} aria-expanded={some} onClick={toggleSome}>
+                Used some…
+              </Button>
+            )}
+          </>
+        )}
+        <Button variant="secondary" className={cx("flex-1 whitespace-nowrap", btn)} onClick={() => done(() => markBinned(item.id))}>
           Bin it
         </Button>
-        <OverflowMenu
-          label={`More for ${item.name}`}
-          placement="up"
-          actions={[
-            {
-              label: "Delete (added by mistake)",
-              Icon: Trash2,
-              danger: true,
-              onSelect: () => done(() => removeItem(item.id)),
-            },
-          ]}
-        />
+        <OverflowMenu label={`More for ${item.name}`} placement="up" actions={more} />
       </div>
     </div>
   );

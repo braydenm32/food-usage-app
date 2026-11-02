@@ -7,6 +7,7 @@ import {
   normalisePersisted,
   opensWhenUsed,
   useLarder,
+  type UndoSnapshot,
 } from "./store";
 import { computeExpiry } from "./shelf-life/engine";
 import { getFoodType } from "./shelf-life/foods";
@@ -46,17 +47,51 @@ describe("undo", () => {
     expect(s().events.filter((e) => e.type === "binned")).toHaveLength(0);
   });
 
-  it("ignores a stale undo id", () => {
+  it("keeps an earlier action's undo after a later one", () => {
     const [a, b] = s().addItems([draft({ name: "A" }), draft({ name: "B" })], "manual");
     s().consumeItem(a.id, "all", "used");
     const first = s().undo!.id;
     s().consumeItem(b.id, "all", "used");
-    s().performUndo(first);
-    expect(s().items).toHaveLength(0);
+    // Undoing the first action leaves the second (unrelated) one alone.
+    expect(s().performUndo(first)).toBe(1);
+    expect(s().items.map((i) => i.name)).toEqual(["A"]);
+    expect(s().performUndo(first)).toBe(0);
+    s().performUndo();
+    expect(s().items.map((i) => i.name).sort()).toEqual(["A", "B"]);
+  });
+
+  it("ignores an undo id that was cleared", () => {
+    const [a, b] = s().addItems([draft({ name: "A" }), draft({ name: "B" })], "manual");
+    s().consumeItem(a.id, "all", "used");
+    const first = s().undo!.id;
+    s().consumeItem(b.id, "all", "used");
     s().clearUndo(first);
+    expect(s().performUndo(first)).toBe(0);
+    expect(s().items).toHaveLength(0);
     expect(s().undo).not.toBeNull();
     s().performUndo(s().undo!.id);
     expect(s().items.map((i) => i.name)).toEqual(["B"]);
+  });
+
+  it("undoing an older action also undoes later changes to the same item", () => {
+    const [a] = s().addItems([draft({ name: "A", quantity: 3, unit: "item" })], "manual");
+    s().consumeItem(a.id, 1, "used");
+    const first = s().undo!.id;
+    s().consumeItem(a.id, 1, "used");
+    expect(s().items[0].quantity).toBe(1);
+    expect(s().performUndo(first)).toBe(2);
+    expect(s().items[0].quantity).toBe(3);
+    expect(s().events.filter((e) => e.type === "used")).toHaveLength(0);
+  });
+
+  it("caps the undo chain and forgets it on undo: null", () => {
+    const created = s().addItems(Array.from({ length: 12 }, (_, i) => draft({ name: `I${i}` })), "manual");
+    for (const c of created) s().consumeItem(c.id, "all", "binned");
+    let n = 0;
+    for (let u: UndoSnapshot | null | undefined = s().undo; u; u = u.prev) n++;
+    expect(n).toBe(8);
+    useLarder.setState({ undo: null });
+    expect(s().performUndo()).toBe(0);
   });
 
   it("consumeMany is one undoable step", () => {
@@ -248,5 +283,25 @@ describe("addItems: amounts, packs and barcodes", () => {
     s().rememberBarcode("42", { foodTypeId: null, name: "Nana's relish", emoji: "🫙", unit: "jar", quantity: 1 });
     expect(normalisePersisted({ barcodes: s().barcodes }).barcodes["42"]).toMatchObject({ name: "Nana's relish" });
     expect(normalisePersisted({}).barcodes).toEqual({});
+  });
+});
+
+describe("household staples", () => {
+  beforeEach(() => s().resetAll());
+  it("marks and unmarks a staple by food type, without duplicates", () => {
+    s().setStaple({ name: "Milk", foodTypeId: "milk-full-cream" }, true);
+    s().setStaple({ name: "Full cream milk", foodTypeId: "milk-full-cream" }, true);
+    expect(s().staples).toHaveLength(1);
+    s().setStaple({ name: "Whatever", foodTypeId: "milk-full-cream" }, false);
+    expect(s().staples).toHaveLength(0);
+  });
+  it("matches by name when there is no food type", () => {
+    s().setStaple({ name: "Nonna's sauce", foodTypeId: null }, true);
+    s().setStaple({ name: "nonna's sauce ", foodTypeId: null }, true);
+    expect(s().staples).toHaveLength(1);
+  });
+  it("survives normalising old saves without staples", () => {
+    expect(normalisePersisted({ items: [] }).staples).toEqual([]);
+    expect(normalisePersisted({ staples: [{ id: "x", name: "Milk", foodTypeId: null }, null] }).staples).toHaveLength(1);
   });
 });

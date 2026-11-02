@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { ArrowLeft, ChevronRight, Lightbulb } from "lucide-react";
+import { ChevronRight, Lightbulb } from "lucide-react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { getFoodType } from "@/lib/shelf-life/foods";
@@ -34,6 +34,8 @@ function mostBinned(events: ItemEvent[]): BinnedFood[] {
   return [...m.values()].sort((a, b) => b.count - a.count || b.value - a.value).slice(0, 5);
 }
 
+const BACK = { href: "/kitchen", label: "Your kitchen" };
+
 const GENERAL_TIPS = [
   "Before a shop, take a quick look at Today. Anything in “Eat me first” can become tonight's dinner.",
   "Freezing buys time. Bread, mince and ripe bananas all freeze well when you can't get to them.",
@@ -49,21 +51,10 @@ export default function InsightsPage() {
   const binned = useMemo(() => mostBinned(events), [events]);
   const monthName = hydrated ? new Date().toLocaleDateString("en-AU", { month: "long" }) : "This month";
 
-  const back = (
-    <Link
-      href="/"
-      aria-label="Back to Today"
-      title="Back to Today"
-      className="inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 hover:bg-surface-2 hover:text-ink lg:hidden"
-    >
-      <ArrowLeft size={22} aria-hidden />
-    </Link>
-  );
-
   if (!hydrated || !month) {
     return (
       <>
-        <PageHeader title="Insights" subtitle={<span className="invisible">Loading</span>} actions={back} />
+        <PageHeader title="Insights" subtitle={<span className="invisible">Loading</span>} back={BACK} />
         <div aria-busy="true" aria-label="Loading insights" className="flex flex-col gap-4 px-5 lg:px-0">
           <div className="h-40 rounded-[var(--radius-card)] bg-surface-2/70" />
           <div className="h-40 rounded-[var(--radius-card)] bg-surface-2/70" />
@@ -77,7 +68,7 @@ export default function InsightsPage() {
 
   return (
     <>
-      <PageHeader title="Insights" subtitle="What got eaten, and what got binned" actions={back} showSettings />
+      <PageHeader title="Insights" subtitle="What got eaten, and what got binned" back={BACK} showSettings />
       <div className="px-5 lg:px-0">
         <Link href="/nutrition" className="mb-4 flex min-h-14 items-center justify-between gap-3 rounded-[var(--radius-card)] border border-line bg-surface px-4 py-3 hover:bg-surface-2">
           <span>
@@ -182,22 +173,25 @@ function PeriodCard({ title, t, emptyText }: { title: string; t: WasteTotals; em
             <div>
               <dt className="flex items-center gap-1.5 text-sm text-ink-2">
                 <span aria-hidden className="h-2.5 w-2.5 rounded-full bg-fresh" />
-                Used
+                Items used up
               </dt>
-              <dd className="font-display text-3xl tabular-nums text-ink">{t.used}</dd>
+              <dd className="font-sans text-3xl font-semibold tabular-nums text-ink">{t.used}</dd>
               {t.usedPriced && <dd className="text-sm text-ink-2">{formatAUD(t.usedValue)} of food</dd>}
             </div>
             <div>
               <dt className="flex items-center gap-1.5 text-sm text-ink-2">
                 <span aria-hidden className="h-2.5 w-2.5 rounded-full bg-spoiled" />
-                Binned
+                Items binned
               </dt>
-              <dd className="font-display text-3xl tabular-nums text-ink">{t.binned}</dd>
+              <dd className="font-sans text-3xl font-semibold tabular-nums text-ink">{t.binned}</dd>
               {t.binnedPriced && <dd className="text-sm text-ink-2">{formatAUD(t.binnedValue)} wasted</dd>}
             </div>
           </dl>
           <WasteSplitBar used={t.used} binned={t.binned} className="mt-4" />
-          <p className="mt-2 text-sm text-ink-2">{Math.round((t.used / total) * 100)}% eaten</p>
+          <p className="mt-2 text-sm text-ink-2">{Math.round((t.used / total) * 100)}% of items eaten, not binned</p>
+          {!t.binnedPriced && !t.usedPriced && (
+            <p className="mt-1 text-xs text-ink-3">Add the price paid in an item&apos;s details to see dollars saved and wasted.</p>
+          )}
         </>
       )}
     </Card>

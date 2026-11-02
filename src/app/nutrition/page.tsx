@@ -2,9 +2,10 @@
 
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Copy, Download, Pin, PinOff, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Copy, Download, Pin, PinOff, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Button, Card, EmptyState, Field, IconButton, Input, PageHeader, SectionTitle, Segmented, Sheet, buttonClass, cx } from "@/components/ui";
 import { toast } from "@/components/toast";
+import { LogFoodSheet } from "./log-food-sheet";
 import { hasFoodData } from "@/lib/nutrition/engine";
 import {
   contributorsFor,
@@ -50,6 +51,7 @@ export default function NutritionPage() {
   const [focus, setFocus] = useState<NutrientKey>("protein");
   const [targetsOpen, setTargetsOpen] = useState(false);
   const [showMicros, setShowMicros] = useState(false);
+  const [logTab, setLogTab] = useState<"food" | "leftovers" | null>(null);
   const sourcesRef = useRef<HTMLDivElement>(null);
 
   const today = toLocalISODate(new Date(now));
@@ -58,13 +60,10 @@ export default function NutritionPage() {
   const { avg, days } = useMemo(() => dailyAverage(meals, from, today), [meals, from, today]);
   const contributors = useMemo(() => contributorsFor(inRange, focus), [inRange, focus]);
 
-  const back = (
-    <Link href="/insights" aria-label="Back to Insights" title="Back to Insights" className="inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 hover:bg-surface-2 hover:text-ink">
-      <ArrowLeft size={22} aria-hidden />
-    </Link>
-  );
+  const back = { href: "/kitchen", label: "Your kitchen" };
+  const openLog = (tab: "food" | "leftovers" = "food") => setLogTab(tab);
 
-  if (!hydrated) return <PageHeader title="Nutrition" subtitle={<span className="invisible">Loading</span>} actions={back} />;
+  if (!hydrated) return <PageHeader title="Nutrition" subtitle={<span className="invisible">Loading</span>} back={back} />;
 
   const perDay = range !== "today";
   const label = perDay ? `Average per day, on the ${days} of ${range} days you logged meals` : "Today so far";
@@ -108,14 +107,12 @@ export default function NutritionPage() {
     <>
       <PageHeader
         title="Nutrition"
-        subtitle="From the meals you cook in Larder"
+        subtitle="From the meals you cook and the food you log"
+        back={back}
         actions={
-          <>
-            {back}
-            <IconButton label="Set targets" onClick={() => setTargetsOpen(true)}>
-              <SlidersHorizontal size={22} />
-            </IconButton>
-          </>
+          <IconButton label="Set targets" onClick={() => setTargetsOpen(true)}>
+            <SlidersHorizontal size={22} />
+          </IconButton>
         }
       />
       <div className="px-5 pb-10 lg:px-0">
@@ -125,15 +122,30 @@ export default function NutritionPage() {
           <EmptyState
             emoji="🍽️"
             title="Nothing logged yet"
-            body="Cook a recipe, tap “I cooked this” and say how many servings you ate. It adds up here, with protein, fibre, vitamins and more."
+            body="Log a food by weight, or cook a recipe and tap “I cooked this”. It adds up here, with protein, fibre, vitamins and more."
             action={
-              <Link href="/recipes" className={buttonClass("primary")}>
-                Find a recipe
-              </Link>
+              <div className="flex flex-col items-center gap-2">
+                <Button onClick={() => openLog("food")}>
+                  <Plus size={18} aria-hidden />
+                  Log a food
+                </Button>
+                <Link href="/recipes" className={buttonClass("secondary")}>
+                  Find a recipe
+                </Link>
+              </div>
             }
           />
         ) : (
           <>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <Button size="sm" className="h-11" onClick={() => openLog("food")}>
+                <Plus size={16} aria-hidden />
+                Log a food
+              </Button>
+              <Button size="sm" variant="secondary" className="h-11" onClick={() => openLog("leftovers")}>
+                Ate leftovers
+              </Button>
+            </div>
             <Segmented label="Time range" value={range} onChange={setRange} options={RANGES} className="max-w-md" />
 
             <Card className="mt-4 p-4">
@@ -149,7 +161,7 @@ export default function NutritionPage() {
               />
               {days === 0 && (
                 <p className="mt-2 text-sm text-ink-3">
-                  {range === "today" ? "Nothing logged today yet. Tap “I cooked this” on a recipe to add a meal." : "Nothing logged in this range."}
+                  {range === "today" ? "Nothing logged today yet. Log a food, or tap “I cooked this” on a recipe." : "Nothing logged in this range."}
                 </p>
               )}
             </Card>
@@ -283,12 +295,13 @@ export default function NutritionPage() {
             </div>
             <p className="mt-3 text-xs text-ink-3">
               MacroFactor and MyFitnessPal don&apos;t let other apps send meals in directly, so copy a meal or a day and add it with Quick Add.
-              Your meal log stays on this device. Figures are estimates from the Australian Food Composition Database (FSANZ).
+              Your meal log stays on this device and goes into your Larder backups. Figures are estimates from the Australian Food Composition Database (FSANZ).
             </p>
           </>
         )}
       </div>
       <TargetsSheet open={targetsOpen} onClose={() => setTargetsOpen(false)} />
+      <LogFoodSheet open={logTab !== null} initialTab={logTab ?? "food"} onClose={() => setLogTab(null)} today={today} />
     </>
   );
 }

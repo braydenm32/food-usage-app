@@ -97,24 +97,33 @@ export interface WasteTotals {
   usedPriced: boolean;
 }
 
+/**
+ * Used vs binned in a period, counted by item, not by event: milk used over four breakfasts is
+ * one item eaten, and an item that was partly eaten and then binned counts as binned.
+ * Dollar values add up every event's share of the price the household paid (or typed in).
+ */
 export function wasteTotals(events: ItemEvent[], since?: Date): WasteTotals {
   const t: WasteTotals = { used: 0, binned: 0, usedValue: 0, binnedValue: 0, binnedPriced: false, usedPriced: false };
+  const outcome = new Map<string, "used" | "binned">();
   for (const e of events) {
     if (since && new Date(e.at) < since) continue;
     if (e.type === "used") {
-      t.used++;
+      if (!outcome.has(e.itemId)) outcome.set(e.itemId, "used");
       if (e.value !== undefined) {
         t.usedValue += e.value;
         t.usedPriced = true;
       }
     } else if (e.type === "binned") {
-      t.binned++;
+      outcome.set(e.itemId, "binned");
       if (e.value !== undefined) {
         t.binnedValue += e.value;
         t.binnedPriced = true;
       }
     }
   }
+  for (const o of outcome.values()) t[o]++;
+  t.usedValue = Math.round(t.usedValue * 100) / 100;
+  t.binnedValue = Math.round(t.binnedValue * 100) / 100;
   return t;
 }
 

@@ -211,6 +211,18 @@ export interface ShoppingListItem {
   note?: string;
 }
 
+/**
+ * A food the household always wants in stock ("Always keep in stock" on the item sheet).
+ * Matched to larder items by food type, or by name when there is none.
+ */
+export interface Staple {
+  id: string;
+  name: string;
+  foodTypeId: string | null;
+  emoji?: string;
+  addedAt: string;
+}
+
 export interface MealPlanEntry {
   id: string;
   date: string; // ISO date
@@ -232,6 +244,8 @@ export interface Settings {
   useSoonDays: number;
   mealPlannerEnabled: boolean;
   onboarded: boolean;
+  /** When the weekly "Fridge check" on Today was last done (ISO date-time). */
+  fridgeCheckAt?: string;
 }
 
 /** A line read from a receipt, list, order or barcode, awaiting review. */

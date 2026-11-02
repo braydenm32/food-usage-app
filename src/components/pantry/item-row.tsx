@@ -1,32 +1,44 @@
 "use client";
 
-import { Check, PackageOpen, Trash, Trash2 } from "lucide-react";
+import { useRef } from "react";
+import { Check, CheckCheck, ListChecks, PackageOpen, Snowflake, Trash, Trash2 } from "lucide-react";
 import type { ItemView } from "@/lib/selectors";
 import { describeDaysLeft } from "@/lib/shelf-life/engine";
 import { FreshnessBar, STATUS_META } from "@/components/freshness";
 import { cx } from "@/components/ui";
 import { describeShareLeft, formatQuantity, freshnessFraction } from "./format";
-import { capitalise, markBinned, markOpened, markUsed, removeItem } from "./actions";
+import { canFreeze, capitalise, freezeItem, markBinned, markOpened, markUsed, removeItem } from "./actions";
 import { OverflowMenu, type MenuAction } from "./overflow-menu";
+import { UseButton } from "./use-button";
 import { keepFocusNear } from "./focus";
 
-/** One larder item: tap to open its sheet; "Used" and a menu for quick actions. */
+/** Hold a row this long to start selecting several. */
+const SELECT_HOLD_MS = 500;
+
+/** One larder item: tap to open its sheet; the "used" button and a menu for quick actions. */
 export function ItemRow({
   view,
   showLocation = true,
   onOpen,
   focusFallback,
+  selection,
+  className,
 }: {
   view: ItemView;
   showLocation?: boolean;
   onOpen: (id: string) => void;
   /** Where focus goes when this row is removed and it has no neighbours. */
   focusFallback?: () => HTMLElement | null;
+  /** Multi-select (Larder): long-press or "Select" starts it; then taps toggle the row. */
+  selection?: { active: boolean; selected: boolean; toggle: (id: string) => void; start: (id: string) => void };
+  className?: string;
 }) {
   const { item, location, expiry } = view;
   const meta = STATUS_META[expiry.status];
   const left = describeShareLeft(item.quantity, item.initialQuantity);
   const days = capitalise(describeDaysLeft(expiry, item.dateKind));
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const held = useRef(false);
 
   // Actions that remove the row keep keyboard focus nearby.
   const removing = (fn: (id: string) => void) => (el?: Element | null) => {
@@ -34,29 +46,80 @@ export function ItemRow({
     fn(item.id);
   };
 
-  const actions: MenuAction[] = [{ label: "Bin it", Icon: Trash, onSelect: () => removing(markBinned)() }];
+  const actions: MenuAction[] = [{ label: "Used it all", Icon: CheckCheck, onSelect: () => removing(markUsed)() }];
+  actions.push({ label: "Bin it", Icon: Trash, onSelect: () => removing(markBinned)() });
+  if (canFreeze(view)) actions.push({ label: "Freeze it", Icon: Snowflake, onSelect: () => freezeItem(item.id) });
   if (!item.openedAt && location?.kind !== "freezer") {
-    actions.unshift({ label: "Mark as opened", Icon: PackageOpen, onSelect: () => markOpened(item.id) });
+    actions.push({ label: "Mark as opened", Icon: PackageOpen, onSelect: () => markOpened(item.id) });
   }
-  actions.push({ label: "Delete (added by mistake)", Icon: Trash2, onSelect: () => removing(removeItem)(), danger: true });
+  if (selection) actions.push({ label: "Select several", Icon: ListChecks, onSelect: () => selection.start(item.id) });
+  actions.push({ label: "Delete entry", Icon: Trash2, onSelect: () => removing(removeItem)(), danger: true });
 
   const amount = [formatQuantity(item.quantity, item.unit), left].filter(Boolean).join(", ");
+  const selecting = !!selection?.active;
+
+  const cancelHold = () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current);
+    holdTimer.current = null;
+  };
 
   return (
-    <li className="flex items-center gap-1 rounded-2xl pr-1 transition-colors hover:bg-surface-2/60">
+    <li
+      className={cx(
+        "flex flex-wrap items-center justify-end gap-x-1 pr-1 transition-colors hover:bg-surface-2/60",
+        selection?.selected && "bg-primary-soft hover:bg-primary-soft",
+        className,
+      )}
+    >
       <button
         type="button"
         data-row-focus={item.id}
-        onClick={() => onOpen(item.id)}
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl py-3 pl-2 text-left"
-        aria-label={`${item.name}, ${days}, ${amount}${showLocation && location ? `, ${location.name}` : ""}. Open details`}
+        aria-pressed={selecting ? !!selection?.selected : undefined}
+        onPointerDown={(e) => {
+          if (!selection || selecting || e.button !== 0) return;
+          held.current = false;
+          holdTimer.current = setTimeout(() => {
+            held.current = true;
+            try {
+              navigator.vibrate?.(20);
+            } catch {
+              /* not supported */
+            }
+            selection.start(item.id);
+          }, SELECT_HOLD_MS);
+        }}
+        onPointerUp={cancelHold}
+        onPointerLeave={cancelHold}
+        onPointerCancel={cancelHold}
+        onContextMenu={(e) => selection && e.preventDefault()}
+        onClick={() => {
+          if (held.current) {
+            held.current = false;
+            return;
+          }
+          if (selecting) selection!.toggle(item.id);
+          else onOpen(item.id);
+        }}
+        className="flex min-w-0 flex-1 basis-40 select-none items-center gap-3 rounded-2xl py-3 pl-2 text-left [-webkit-touch-callout:none]"
       >
-        <span
-          aria-hidden
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-surface-2 text-[1.75rem] leading-none"
-        >
-          {item.emoji}
-        </span>
+        {selecting ? (
+          <span
+            aria-hidden
+            className={cx(
+              "flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border-2",
+              selection?.selected ? "border-primary bg-primary text-primary-ink" : "border-line bg-surface text-transparent",
+            )}
+          >
+            <Check size={22} strokeWidth={3} />
+          </span>
+        ) : (
+          <span
+            aria-hidden
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-surface-2 text-[1.75rem] leading-none"
+          >
+            {item.emoji}
+          </span>
+        )}
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-[16px] font-semibold text-ink">{item.name}</span>
@@ -79,27 +142,25 @@ export function ItemRow({
                 .map((part, i) => (
                   <span
                     key={i}
-                    className="whitespace-nowrap before:inline-block before:w-3 before:text-center before:text-ink-3 before:content-['·']"
+                    className={cx(i === 0 ? "min-w-0" : "whitespace-nowrap", "before:inline-block before:w-3 before:text-center before:text-ink-3 before:content-['·']")}
                   >
                     {part}
                   </span>
                 ))}
             </span>
           </span>
-          <FreshnessBar status={expiry.status} fraction={freshnessFraction(view)} className="mt-1 max-w-56 sm:max-w-none" />
+          {/* Only food that needs attention gets a bar: a list of full green bars is just noise. */}
+          {expiry.status !== "fresh" && (
+            <FreshnessBar status={expiry.status} fraction={freshnessFraction(view)} className="mt-1 max-w-56 sm:max-w-none" />
+          )}
         </span>
       </button>
-      <button
-        type="button"
-        onClick={(e) => removing(markUsed)(e.currentTarget)}
-        className="inline-flex h-11 w-11 shrink-0 items-center justify-center gap-1.5 rounded-full text-sm font-semibold text-primary transition-colors hover:bg-primary-soft sm:ml-3 sm:w-auto sm:border sm:border-line sm:px-3.5"
-        aria-label={`Used all of ${item.name}`}
-        title="Used it all"
-      >
-        <Check size={20} aria-hidden strokeWidth={2.5} />
-        <span className="hidden sm:inline">Used</span>
-      </button>
-      <OverflowMenu label={`More for ${item.name}`} actions={actions} />
+      {!selecting && (
+        <span className="flex shrink-0 items-center gap-1 sm:ml-2">
+          <UseButton item={item} beforeRemove={(el) => keepFocusNear(el, focusFallback)} />
+          <OverflowMenu label={`More for ${item.name}`} actions={actions} />
+        </span>
+      )}
     </li>
   );
 }
