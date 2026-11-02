@@ -657,9 +657,24 @@ export const useLarder = create<LarderState>()(
   ),
 );
 
+let rehydratingFromOtherTab = false;
+
+/**
+ * True while the store is reloading what another tab saved. Sync uses it to tell those
+ * changes (already queued by the tab that made them) from edits made here.
+ */
+export const isRehydratingFromOtherTab = () => rehydratingFromOtherTab;
+
 // Another tab saved: pick up its changes so tabs don't overwrite each other.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
-    if (e.key === STORAGE_KEY) void useLarder.persist.rehydrate();
+    if (e.key !== STORAGE_KEY) return;
+    // localStorage is synchronous, so the state is replaced before rehydrate() returns.
+    rehydratingFromOtherTab = true;
+    try {
+      void useLarder.persist.rehydrate();
+    } finally {
+      rehydratingFromOtherTab = false;
+    }
   });
 }

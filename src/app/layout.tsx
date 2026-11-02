@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Figtree, Young_Serif } from "next/font/google";
 import { Providers } from "@/components/providers";
 import { AppShell } from "@/components/app-shell";
+import { AppErrorBoundary } from "@/components/app-error-boundary";
 import "./globals.css";
 
 const figtree = Figtree({ variable: "--font-figtree", subsets: ["latin"] });
@@ -29,7 +30,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en-AU" className={`${figtree.variable} ${youngSerif.variable} h-full antialiased`} suppressHydrationWarning>
       <body className="min-h-full">
         <Providers>
-          <AppShell>{children}</AppShell>
+          <AppErrorBoundary>
+            <AppShell>{children}</AppShell>
+          </AppErrorBoundary>
         </Providers>
       </body>
     </html>

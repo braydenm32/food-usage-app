@@ -12,6 +12,9 @@ import { notificationSupport, type NotificationSupport } from "@/lib/reminders";
 import type { Diet, Settings, StorageLocation } from "@/lib/types";
 import { Button, Card, Chip, Field, IconButton, Input, PageHeader, Segmented, Stepper, Switch, cx } from "@/components/ui";
 import { toast } from "@/components/toast";
+import { SettingsSyncRow } from "@/components/sync-indicator";
+import { getSyncEngine } from "@/lib/sync/engine";
+import { useSyncStatus } from "@/lib/sync/status";
 
 const APP_VERSION = "0.1.0";
 
@@ -242,6 +245,8 @@ export default function SettingsPage() {
   const removeOverride = useLarder((s) => s.removeOverride);
   const resetAll = useLarder((s) => s.resetAll);
   const loadDemoData = useLarder((s) => s.loadDemoData);
+  const syncingWith = useSyncStatus((s) => s.householdName ?? (s.householdId ? "your household" : null));
+  const syncing = syncingWith !== null;
 
   const [newSpot, setNewSpot] = useState({ name: "", kind: "fridge" as StorageLocation["kind"], emoji: "" });
   const [support, setSupport] = useState<NotificationSupport>(() =>
@@ -360,8 +365,14 @@ export default function SettingsPage() {
 
   return (
     <div className="lg:pb-8">
-      <PageHeader title="Settings" subtitle="Everything stays on this device." />
+      <PageHeader
+        title="Settings"
+        subtitle={syncing ? "Theme and reminders are just for this device." : "Everything stays on this device."}
+      />
       <div className="px-5 lg:px-0">
+        <div className="mt-2">
+          <SettingsSyncRow />
+        </div>
         {/* Household */}
         <Section id="household" title="Household">
           <Group>
@@ -372,6 +383,7 @@ export default function SettingsPage() {
                     id={id}
                     value={profile.householdName}
                     onChange={(e) => setProfile({ householdName: e.target.value })}
+                    onBlur={(e) => void getSyncEngine()?.renameHousehold(e.target.value).catch(() => {})}
                     placeholder="The Nguyens, Flat 3…"
                   />
                 )}
@@ -644,7 +656,15 @@ export default function SettingsPage() {
         </Section>
 
         {/* Data */}
-        <Section id="data" title="Your data" intro="Larder keeps everything in this browser. Export a copy to move it or keep it safe.">
+        <Section
+          id="data"
+          title="Your data"
+          intro={
+            syncing
+              ? `Larder keeps a copy in this browser and syncs it with ${syncingWith}. Importing a file replaces the household's food too.`
+              : "Larder keeps everything in this browser. Export a copy to move it or keep it safe."
+          }
+        >
           <Group>
             <Row className="flex flex-wrap gap-2">
               <Button variant="secondary" onClick={exportJson}>
@@ -704,6 +724,7 @@ export default function SettingsPage() {
                   <p id="erase-body" className="mt-1 text-sm text-ink-2">
                     This removes {items.length} item{items.length === 1 ? "" : "s"} and all history. Export a copy first if you might
                     want it back.
+                    {syncing && ` This device also stops syncing; ${syncingWith} keeps its food.`}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button variant="secondary" size="sm" onClick={() => setConfirmErase(false)} autoFocus>
@@ -713,6 +734,8 @@ export default function SettingsPage() {
                       variant="danger"
                       size="sm"
                       onClick={() => {
+                        // Erasing this device must not erase the household's copy.
+                        getSyncEngine()?.unbind();
                         resetAll();
                         setConfirmErase(false);
                         toast("Everything's been erased");
