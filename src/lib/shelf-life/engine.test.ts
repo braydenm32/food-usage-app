@@ -47,14 +47,14 @@ describe("unknown-food fallback", () => {
     expect(expiry(item({ name: "Dragon fruit jam" }), FRIDGE).daysLeft).toBe(5);
   });
 
-  it("treats unknown raw meat and seafood as high risk: fridge, use-by, 2 days", () => {
+  it("treats unknown raw meat and seafood as high risk: fridge, use-by, 3 days", () => {
     for (const name of ["Kangaroo fillet", "Pork belly", "Fish cakes", "Chicken kiev", "Snags"]) {
       expect(isHighRisk(name)).toBe(true);
     }
     expect(isHighRisk("Mango chutney")).toBe(false);
-    expect(defaultsForUnknown("Beef strips")).toMatchObject({ locationId: "fridge", dateKind: "use-by", days: 2, highRisk: true });
-    expect(expiry(item({ name: "Beef strips" }), FRIDGE).daysLeft).toBe(2);
-    expect(expiry(item({ name: "Beef strips" }), PANTRY).daysLeft).toBe(2);
+    expect(defaultsForUnknown("Beef strips")).toMatchObject({ locationId: "fridge", dateKind: "use-by", days: 3, highRisk: true });
+    expect(expiry(item({ name: "Beef strips" }), FRIDGE).daysLeft).toBe(3);
+    expect(expiry(item({ name: "Beef strips" }), PANTRY).daysLeft).toBe(3);
   });
 
   it("keeps 30 days for unknown foods in the pantry and 90 frozen", () => {

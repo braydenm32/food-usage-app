@@ -319,7 +319,7 @@ describe("parser fixes from review", () => {
   it("puts unknown raw meat in the fridge with a short use-by", () => {
     const d = lineToDraft(parseLine("venison sausages 500g")!);
     expect(d).toMatchObject({ foodTypeId: null, locationId: "fridge", dateKind: "use-by", quantity: 500, unit: "g" });
-    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 2 });
+    expect(defaultsForUnknown("goat curry pieces")).toMatchObject({ locationId: "fridge", highRisk: true, days: 3 });
     // Other unknown foods also go to the fridge, but with a gentler estimate.
     expect(lineToDraft({ name: "Dragon fruit jam" })).toMatchObject({ locationId: "fridge", dateKind: "best-before" });
   });
