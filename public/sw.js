@@ -116,8 +116,15 @@ self.addEventListener("push", (event) => {
 // Open the page the notification is about, reusing a Larder window when one is open.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const path = (event.notification.data && event.notification.data.url) || "/";
-  const target = new URL(path, self.location.origin).href;
+  // Only ever open a page of Larder itself: anything else (another site, a bad URL) opens Today.
+  const raw = (event.notification.data && event.notification.data.url) || "/";
+  let target = new URL("/", self.location.origin).href;
+  try {
+    const url = new URL(String(raw), self.location.origin);
+    if (url.origin === self.location.origin) target = url.href;
+  } catch {
+    // Keep "/".
+  }
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (wins) => {
       const same = wins.find((w) => w.url === target);

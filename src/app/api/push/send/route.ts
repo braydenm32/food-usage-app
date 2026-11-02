@@ -1,10 +1,10 @@
 import { bearerMatches, missingPushEnv, pushConfig, sendDueDigests } from "@/lib/push/server";
 
 /**
- * GET (Vercel Cron) or POST (any other scheduler): send the reminder digests that are due.
- * Runs hourly; each subscription has its own local hour and zone, and each slot sends once.
- * Needs `Authorization: Bearer <CRON_SECRET>`. Vercel Cron sends that header itself when
- * the CRON_SECRET env var is set.
+ * POST (Supabase pg_cron + pg_net, see the README) or GET: send the reminder digests that are
+ * due. Runs hourly; each subscription has its own local hour and zone, and each slot sends once
+ * (rows are claimed before sending, so overlapping runs don't double up).
+ * Needs `Authorization: Bearer <CRON_SECRET>`.
  */
 async function run(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -28,6 +28,9 @@ async function run(request: Request) {
     return Response.json({ error: "failed", message: e instanceof Error ? e.message : "Sending failed." }, { status: 500 });
   }
 }
+
+/** One run reads every due household and sends with a 10 s timeout per push; give it room. */
+export const maxDuration = 60;
 
 export const GET = run;
 export const POST = run;

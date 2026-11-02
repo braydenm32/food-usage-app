@@ -35,7 +35,7 @@ Copy `.env.example` to `.env.local` and fill in what you need. Without the Supab
 
 ## Sync and sharing (Supabase)
 
-Larder stays local-first: the store in localStorage is the source of truth on each device. When someone signs in and starts or joins a household, every record (items, history, storage spots, shelf-life overrides, the household profile, saved recipes, shopping list, meal plan) is mirrored as one row in `household_records`. Theme, reminders and other settings stay per device.
+Larder stays local-first: the store in localStorage is the source of truth on each device. When someone signs in and starts or joins a household, every record (items, history, storage spots, shelf-life overrides, the household profile, saved recipes, shopping list, meal plan, "always keep in stock" staples) is mirrored as one row in `household_records`. Theme, reminders and other settings stay per device, and so does the memory of what each scanned barcode was.
 
 - **Push:** local changes are diffed by id and queued in an outbox (`larder-sync` in localStorage). The queue flushes about 600 ms after the last change, when the device comes back online, and when the app comes to the front. Nothing leaves the queue until the server has it.
 - **Pull:** each device pulls rows newer than the highest `seq` it has seen. Realtime only says "something changed"; the same incremental pull does the work.
@@ -61,11 +61,11 @@ Code: `src/lib/sync/` (pure diff/outbox/apply logic with tests, plus the engine)
 
 People with an account in a household get their reminder digest as a push notification at the hour they chose, in their own time zone, even when Larder is closed. Without an account (or until this is set up) reminders show when Larder is opened after that hour, and a missed weekly one shows on the next open. Settings says which applies.
 
-How it works: when someone allows notifications (from Settings, or the prompt after their first add), the device subscribes with the VAPID public key and saves the subscription plus its reminder time, zone, cadence and "use soon" days through the `save_push_subscription` RPC into `push_subscriptions` (row-level security: people see and delete only their own rows; leaving a household removes its subscriptions). Every hour `/api/push/send` finds the subscriptions whose slot has passed since they last got one, builds each household's digest from its synced food with the same shelf-life engine as the app, and sends it with `web-push`. Expired subscriptions are removed. Code: `src/lib/push/`, `src/app/api/push/`, `public/sw.js`.
+How it works: when someone allows notifications (from Settings, or the prompt after their first add), the device subscribes with the VAPID public key and saves the subscription plus its reminder time, zone, cadence and "use soon" days through the `save_push_subscription` RPC into `push_subscriptions` (row-level security: people see and delete only their own rows; leaving a household removes its subscriptions). Every hour `/api/push/send` (called by Supabase `pg_cron`) finds the subscriptions whose slot has passed since they last got one, claims each row (so overlapping runs never send twice), builds each household's digest from its synced food with the same shelf-life engine as the app, and sends it with `web-push`. It only ever contacts the browser push services (Google FCM, Mozilla, Apple, Microsoft): the `save_push_subscription` RPC and the sender both refuse any other endpoint. Expired subscriptions are removed, and signing out or leaving a household removes that device's subscription. Code: `src/lib/push/`, `src/app/api/push/`, `public/sw.js`.
 
 ### Setting it up
 
-1. Apply `supabase/migrations/20261102000000_push_subscriptions.sql` (with the others, `supabase db push`).
+1. Apply `supabase/migrations/20261102000000_push_subscriptions.sql` and `20261102000100_sync_staples.sql` (with the others, `supabase db push`).
 2. Generate a key pair once: `npx web-push generate-vapid-keys`. Keep it: changing the keys stops existing subscriptions, and people would need to turn reminders off and on again.
 3. In Vercel (Project → Settings → Environment Variables), set:
    - `NEXT_PUBLIC_VAPID_PUBLIC_KEY`: the public key.
@@ -74,15 +74,24 @@ How it works: when someone allows notifications (from Settings, or the prompt af
    - `SUPABASE_SERVICE_ROLE_KEY`: Supabase dashboard → Project Settings → API keys → `service_role` (or a secret key).
    - `CRON_SECRET`: any long random string (`openssl rand -hex 32`).
    Redeploy afterwards: the public key is built into the client.
-4. Schedule the sender. `vercel.json` runs `/api/push/send` at the top of every hour, and Vercel Cron sends `Authorization: Bearer $CRON_SECRET` itself. Vercel's Hobby plan only runs cron jobs once a day, so on Hobby use another scheduler instead, for example Supabase `pg_cron` with `pg_net`:
+4. Schedule the sender with Supabase `pg_cron` and `pg_net` (works on Vercel's free Hobby plan, whose cron jobs only run once a day; there is no cron in `vercel.json`). In the Supabase dashboard → Database → Extensions, enable `pg_cron` and `pg_net`. Then in the SQL editor, keep the secret in Vault (not in plain text in `cron.job`) and schedule the call at the top of every hour:
    ```sql
+   select vault.create_secret('<CRON_SECRET>', 'larder_cron_secret');
+   select vault.create_secret('https://<your-site>/api/push/send', 'larder_push_url');
+
    select cron.schedule('larder-reminders', '0 * * * *', $$
      select net.http_post(
-       url := 'https://<your-site>/api/push/send',
-       headers := jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>')
+       url := (select decrypted_secret from vault.decrypted_secrets where name = 'larder_push_url'),
+       headers := jsonb_build_object(
+         'Content-Type', 'application/json',
+         'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'larder_cron_secret')
+       ),
+       body := '{}'::jsonb,
+       timeout_milliseconds := 30000
      );
    $$);
    ```
+   To change the secret later: `select vault.update_secret((select id from vault.secrets where name = 'larder_cron_secret'), '<new secret>');`. Recent runs are in `cron.job_run_details`, responses in `net._http_response`.
 5. Check it: sign in, turn on Settings → Reminders → Notifications, then tap "Send a test". You can also call the sender by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-site>/api/push/send` returns how many were checked, due and sent.
 
 iPhone and iPad only receive web push once Larder is added to the Home Screen and opened from there (iOS 16.4 or later).

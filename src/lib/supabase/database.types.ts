@@ -158,6 +158,7 @@ export type Database = {
           household_id: string
           id: string
           last_sent_at: string | null
+          last_test_at: string | null
           p256dh: string
           time_zone: string
           updated_at: string
@@ -175,6 +176,7 @@ export type Database = {
           household_id: string
           id?: string
           last_sent_at?: string | null
+          last_test_at?: string | null
           p256dh: string
           time_zone?: string
           updated_at?: string
@@ -192,6 +194,7 @@ export type Database = {
           household_id?: string
           id?: string
           last_sent_at?: string | null
+          last_test_at?: string | null
           p256dh?: string
           time_zone?: string
           updated_at?: string

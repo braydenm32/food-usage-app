@@ -19,9 +19,30 @@ create table public.push_subscriptions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_sent_at timestamptz,
+  -- Last "Send a test reminder", for a short per-device cooldown.
+  last_test_at timestamptz,
   -- Consecutive delivery failures; the sender drops a row after too many.
   failures smallint not null default 0
 );
+-- Only the real browser push services, so the sender never posts anywhere else (SSRF).
+-- The sender checks the same list again before every send (src/lib/push/endpoint.ts).
+create or replace function private.is_push_service_endpoint(endpoint text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select coalesce(
+    (
+      select h = any (array['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com'])
+        or h ~ '^[a-z0-9.-]+\.(push\.services\.mozilla\.com|notify\.windows\.com|push\.apple\.com)$'
+      from (select lower(substring(endpoint from '^https://([^/?#:@]+)(?:[/?#]|$)')) as h) as parsed
+    ),
+    false
+  );
+$$;
+revoke execute on function private.is_push_service_endpoint(text) from public, anon, authenticated;
+
 create index push_subscriptions_user_idx on public.push_subscriptions (user_id);
 create index push_subscriptions_household_idx on public.push_subscriptions (household_id);
 
@@ -64,6 +85,9 @@ begin
   end if;
   if not private.is_household_member(hid) then
     raise exception 'Not a member of this household' using errcode = '42501';
+  end if;
+  if not private.is_push_service_endpoint(sub_endpoint) then
+    raise exception 'Not a browser push service' using errcode = '22023';
   end if;
   if not exists (select 1 from pg_catalog.pg_timezone_names where name = sub_time_zone) then
     raise exception 'Unknown time zone' using errcode = '22023';

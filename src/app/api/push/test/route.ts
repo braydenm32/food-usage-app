@@ -1,4 +1,4 @@
-import { adminClient, digestPayload, householdRows, pushConfig, scheduleOf, sendPush } from "@/lib/push/server";
+import { adminClient, claimTestSend, digestPayload, householdRows, pushConfig, scheduleOf, sendPush, TEST_COOLDOWN_SECONDS } from "@/lib/push/server";
 import { householdDigest } from "@/lib/push/digest";
 
 function error(status: number, code: string, message: string) {
@@ -36,6 +36,12 @@ export async function POST(request: Request) {
     .eq("user_id", user.user.id)
     .maybeSingle();
   if (!sub) return error(404, "not_found", "This device isn't set up for reminders yet. Turn reminders off and on again.");
+  if (!(await claimTestSend(db, sub.id))) {
+    return Response.json(
+      { error: "rate_limited", message: "A test reminder was just sent. Wait a few seconds and try again." },
+      { status: 429, headers: { "Retry-After": String(TEST_COOLDOWN_SECONDS) } },
+    );
+  }
 
   let payload = {
     title: "Reminders are on",
