@@ -305,3 +305,67 @@ describe("household staples", () => {
     expect(normalisePersisted({ staples: [{ id: "x", name: "Milk", foodTypeId: null }, null] }).staples).toHaveLength(1);
   });
 });
+
+describe("review fixes", () => {
+  beforeEach(() => s().resetAll());
+
+  it("dropping a newer snapshot also drops older ones on the same records, so they can't clobber it", () => {
+    const [a] = s().addItems([draft({ name: "A", quantity: 3, unit: "item" })], "manual");
+    s().consumeItem(a.id, 1, "used");
+    const older = s().undo!.id;
+    s().consumeItem(a.id, 1, "used");
+    const newer = s().undo!.id;
+    // The newer toast closes first: its snapshot goes, and the older one on the same item with it.
+    s().clearUndo(newer);
+    expect(s().performUndo(older)).toBe(0);
+    expect(s().items[0].quantity).toBe(1);
+  });
+
+  it("dropping a snapshot keeps unrelated older ones", () => {
+    const [a, b] = s().addItems([draft({ name: "A" }), draft({ name: "B" })], "manual");
+    s().consumeItem(a.id, "all", "used");
+    const older = s().undo!.id;
+    s().consumeItem(b.id, "all", "used");
+    s().clearUndo(s().undo!.id);
+    expect(s().performUndo(older)).toBe(1);
+    expect(s().items.map((i) => i.name)).toEqual(["A"]);
+  });
+
+  it("Undo of an add forgets the barcode it remembered, and restores an older memory", () => {
+    s().addItems([draft({ barcode: "777", name: "Oat milk" })], "barcode");
+    expect(s().barcodes["777"]?.name).toBe("Oat milk");
+    s().performUndo();
+    expect(s().barcodes["777"]).toBeUndefined();
+    s().rememberBarcode("888", { foodTypeId: null, name: "Old", emoji: "🫙", unit: "jar", quantity: 1 });
+    s().addItems([draft({ barcode: "888", name: "New" })], "barcode");
+    s().performUndo();
+    expect(s().barcodes["888"]?.name).toBe("Old");
+  });
+
+  it("matches staples across a recipe family but not across a catch-all id", () => {
+    s().setStaple({ name: "Milk", foodTypeId: "milk-full-cream" }, true);
+    s().setStaple({ name: "Skim milk", foodTypeId: "milk-skim" }, true);
+    expect(s().staples).toHaveLength(1);
+    s().setStaple({ name: "Cumin", foodTypeId: "spices" }, true);
+    s().setStaple({ name: "Cinnamon", foodTypeId: "spices" }, true);
+    expect(s().staples).toHaveLength(3);
+  });
+
+  it("keeps both notes when list rows merge", () => {
+    s().addToList([{ name: "Bread", foodTypeId: null, quantity: 6, unit: "slice", note: "for French toast" }]);
+    s().addToList([{ name: "Bread", foodTypeId: null, quantity: 2, unit: "slice", note: "for sandwiches" }]);
+    expect(s().shoppingList[0].note).toBe("for French toast; for sandwiches");
+  });
+
+  it("plans keep a recipe copy, and unsaving copies it into older plan entries", () => {
+    const r = { id: "ai-1", title: "Fritters", ingredients: [], steps: [], tags: [], servings: 2, source: "ai" } as unknown as import("./types").Recipe;
+    s().saveRecipe(r);
+    s().planMeal("2026-11-03", r);
+    expect(s().mealPlan[0].recipe?.title).toBe("Fritters");
+    // An entry from before this change has no copy.
+    useLarder.setState({ mealPlan: [{ id: "m1", date: "2026-11-04", recipeId: "ai-1" }] });
+    s().unsaveRecipe("ai-1");
+    expect(s().savedRecipes).toHaveLength(0);
+    expect(s().mealPlan[0].recipe?.title).toBe("Fritters");
+  });
+});

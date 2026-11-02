@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { addAmounts } from "@/lib/recipes/quantity";
+import { CATCH_ALL_IDS, familyOf } from "@/lib/recipes/families";
 import type {
   Aisle,
   BarcodeMemory,
@@ -78,6 +79,8 @@ export interface UndoSnapshot {
   list: Touched<ShoppingListItem>[];
   /** Events the action appended (removed again on undo). */
   eventIds: string[];
+  /** Barcode memories the action wrote: each code's memory before (null = it was new). */
+  barcodes?: { code: string; before: BarcodeMemory | null }[];
   /**
    * Older actions that can still be undone, newest first along the chain. Each toast keeps
    * its own Undo for its window, so a second action doesn't take away the first one's Undo.
@@ -106,7 +109,32 @@ function linkChain(list: UndoSnapshot[]): UndoSnapshot | null {
   return head ?? null;
 }
 
-const touchedIds = (u: UndoSnapshot) => new Set([...u.items.map((t) => `i:${t.id}`), ...u.list.map((t) => `l:${t.id}`)]);
+const touchedIds = (u: UndoSnapshot) =>
+  new Set([
+    ...u.items.map((t) => `i:${t.id}`),
+    ...u.list.map((t) => `l:${t.id}`),
+    ...(u.barcodes ?? []).map((b) => `b:${b.code}`),
+  ]);
+
+/**
+ * Drop `dropId` from the chain, plus every older snapshot that touched the same records
+ * (transitively). Otherwise undoing an older action later would put back records the
+ * dropped, newer action changed, silently reverting it too.
+ */
+export function dropFromChain(chain: UndoSnapshot[], dropId: string): UndoSnapshot[] {
+  const at = chain.findIndex((u) => u.id === dropId);
+  if (at < 0) return chain;
+  const ids = touchedIds(chain[at]);
+  const drop = new Set([dropId]);
+  for (let i = at + 1; i < chain.length; i++) {
+    const t = touchedIds(chain[i]);
+    if ([...t].some((x) => ids.has(x))) {
+      drop.add(chain[i].id);
+      t.forEach((x) => ids.add(x));
+    }
+  }
+  return chain.filter((u) => !drop.has(u.id));
+}
 
 /** Records in `prev` that changed or vanished in `next`, plus records new in `next`. */
 export function diffById<T extends { id: string }>(prev: T[], next: T[]): Touched<T>[] {
@@ -382,10 +410,24 @@ export function normalisePersisted(raw: unknown): PersistedData {
   };
 }
 
+/** Join two list-row notes ("6 slices for French toast" + "for sandwiches"), skipping repeats. */
+export function joinNotes(a: string | undefined, b: string | undefined): string | undefined {
+  const parts = [a, b].map((x) => x?.trim()).filter((x): x is string => !!x);
+  const unique = parts.filter((x, i) => parts.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+  return unique.length ? unique.join("; ") : undefined;
+}
+
 /** Whether a staple and a larder item (or list row) are the same food. */
 export function sameStapleFood(a: { name: string; foodTypeId: string | null }, b: { name: string; foodTypeId: string | null }): boolean {
-  if (a.foodTypeId && b.foodTypeId) return a.foodTypeId === b.foodTypeId;
-  return a.name.trim().toLowerCase() === b.name.trim().toLowerCase();
+  const sameName = a.name.trim().toLowerCase() === b.name.trim().toLowerCase();
+  if (a.foodTypeId && b.foodTypeId) {
+    // A catch-all id ("spices") groups unlike foods, so the names must agree too.
+    if (a.foodTypeId === b.foodTypeId) return !CATCH_ALL_IDS.has(a.foodTypeId) || sameName;
+    // Same thing for the household: a "milk" staple is covered by skim or full cream.
+    const fam = familyOf(a.foodTypeId);
+    return !!fam && fam === familyOf(b.foodTypeId);
+  }
+  return sameName;
 }
 
 /** Whether an item going into the freezer is already past its date (freezing won't fix that). */
@@ -422,6 +464,10 @@ export const useLarder = create<LarderState>()(
           list: diffById(prev.shoppingList, shoppingList),
           eventIds: events.filter((e) => !prevEventIds.has(e.id)).map((e) => e.id),
         };
+        if (patch.barcodes) {
+          const changed = Object.keys(patch.barcodes).filter((code) => patch.barcodes![code] !== prev.barcodes[code]);
+          if (changed.length) undo.barcodes = changed.map((code) => ({ code, before: prev.barcodes[code] ?? null }));
+        }
         const older = undoChain(prev.undo).slice(0, MAX_UNDO - 1);
         if (older.length) undo.prev = linkChain(older) ?? undefined;
         set({ ...patch, ...(patch.events ? { events: capEvents(patch.events) } : {}), undo });
@@ -478,18 +524,9 @@ export const useLarder = create<LarderState>()(
               };
             });
           // Remember what each scanned barcode turned out to be, so the next scan needs no lookup.
+          // Written in the same undoable step, so Undo forgets a mistaken scan too.
           const scanned = drafts.filter((d) => d.include && d.barcode && d.quantity > 0 && !d.name.startsWith("Barcode "));
-          if (scanned.length) {
-            const at = nowISO();
-            set((s) => ({
-              barcodes: {
-                ...s.barcodes,
-                ...Object.fromEntries(
-                  scanned.map((d) => [d.barcode!, { foodTypeId: d.foodTypeId, name: d.name, emoji: d.emoji, unit: d.unit, quantity: d.quantity, at }]),
-                ),
-              },
-            }));
-          }
+          const scannedAt = nowISO();
           const removeIds = new Set(opts?.removeListIds ?? []);
           const merges = new Map((opts?.merge ?? []).filter((m) => m.quantity > 0).map((m) => [m.itemId, m]));
           const total = created.length + merges.size;
@@ -509,6 +546,19 @@ export const useLarder = create<LarderState>()(
               return next;
             });
             return {
+              ...(scanned.length
+                ? {
+                    barcodes: {
+                      ...s.barcodes,
+                      ...Object.fromEntries(
+                        scanned.map((d) => [
+                          d.barcode!,
+                          { foodTypeId: d.foodTypeId, name: d.name, emoji: d.emoji, unit: d.unit, quantity: d.quantity, at: scannedAt },
+                        ]),
+                      ),
+                    },
+                  }
+                : {}),
               items: [...items, ...created],
               events: [
                 ...s.events,
@@ -741,16 +791,25 @@ export const useLarder = create<LarderState>()(
           set((s) => {
             let items = s.items;
             let shoppingList = s.shoppingList;
+            let barcodes = s.barcodes;
             const added = new Set<string>();
             for (const u of chain.slice(0, at + 1)) {
               if (!revert.has(u.id)) continue;
               items = revertById(items, u.items);
               shoppingList = revertById(shoppingList, u.list);
               u.eventIds.forEach((e) => added.add(e));
+              if (u.barcodes?.length) {
+                barcodes = { ...barcodes };
+                for (const b of u.barcodes) {
+                  if (b.before) barcodes[b.code] = b.before;
+                  else delete barcodes[b.code];
+                }
+              }
             }
             return {
               items,
               shoppingList,
+              barcodes,
               events: added.size ? s.events.filter((e) => !added.has(e.id)) : s.events,
               undo: linkChain(chain.filter((u) => !revert.has(u.id))),
             };
@@ -762,7 +821,7 @@ export const useLarder = create<LarderState>()(
           if (chain.length === 0) return;
           const drop = id === undefined ? chain[0].id : id;
           if (!chain.some((u) => u.id === drop)) return;
-          set({ undo: linkChain(chain.filter((u) => u.id !== drop)) });
+          set({ undo: linkChain(dropFromChain(chain, drop)) });
         },
 
         setStaple: (food, on) =>
@@ -806,7 +865,18 @@ export const useLarder = create<LarderState>()(
               ? {}
               : { savedRecipes: [{ ...r, savedAt: nowISO() }, ...s.savedRecipes] },
           ),
-        unsaveRecipe: (id) => set((s) => ({ savedRecipes: s.savedRecipes.filter((r) => r.id !== id) })),
+        unsaveRecipe: (id) =>
+          set((s) => {
+            const saved = s.savedRecipes.find((r) => r.id === id);
+            if (!saved) return {};
+            // Planned meals keep a copy, so the plan can still open a recipe that is no longer saved.
+            return {
+              savedRecipes: s.savedRecipes.filter((r) => r.id !== id),
+              mealPlan: s.mealPlan.some((m) => m.recipeId === id && !m.recipe)
+                ? s.mealPlan.map((m) => (m.recipeId === id && !m.recipe ? { ...m, recipe: saved } : m))
+                : s.mealPlan,
+            };
+          }),
         updateSavedRecipe: (id, patch) =>
           set((s) => ({ savedRecipes: s.savedRecipes.map((r) => (r.id === id ? { ...r, ...patch, id: r.id, savedAt: r.savedAt } : r)) })),
 
@@ -826,7 +896,8 @@ export const useLarder = create<LarderState>()(
                 const sum = addAmounts(existing, e);
                 if (sum) {
                   const i = list.indexOf(existing);
-                  list[i] = { ...existing, ...sum };
+                  const note = joinNotes(existing.note, e.note);
+                  list[i] = { ...existing, ...sum, ...(note ? { note } : {}) };
                   continue;
                 }
                 // Units that can't be added (1 bunch + 200 g): keep both rows rather than lose one.
@@ -855,8 +926,9 @@ export const useLarder = create<LarderState>()(
           set((s) => {
             const entry: MealPlanEntry = { id: uid(), date, recipeId: recipe.id };
             if (servings && servings > 0) entry.servings = Math.round(servings);
-            const keepCopy = !recipe.id.startsWith("builtin-") && !s.savedRecipes.some((r) => r.id === recipe.id);
-            if (keepCopy) entry.recipe = recipe;
+            // Anything not built in keeps a copy (saved ones too): it may be unsaved later, here or on
+            // another device in the household. Built-in and saved recipes are still looked up first.
+            if (!recipe.id.startsWith("builtin-")) entry.recipe = recipe;
             return { mealPlan: [...s.mealPlan, entry] };
           }),
         unplanMeal: (id) => set((s) => ({ mealPlan: s.mealPlan.filter((m) => m.id !== id) })),

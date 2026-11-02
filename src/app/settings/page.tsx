@@ -253,6 +253,8 @@ const importSchema = z.object({
   savedRecipes: z.array(z.object({ id: z.string(), title: z.string(), ingredients: z.array(z.any()) }).loose()).default([]),
   shoppingList: z.array(z.object({ id: z.string(), name: z.string(), checked: z.boolean() }).loose()).default([]),
   mealPlan: z.array(z.object({ id: z.string(), date: z.string(), recipeId: z.string() }).loose()).default([]),
+  // Optional: older backups have no staples, and then the current ones are kept.
+  staples: z.array(z.object({ id: z.string(), name: z.string() }).loose()).optional(),
 });
 
 function exportSnapshot() {
@@ -271,6 +273,8 @@ function exportSnapshot() {
       savedRecipes: s.savedRecipes,
       shoppingList: s.shoppingList,
       mealPlan: s.mealPlan,
+      staples: s.staples,
+      // Barcodes are device-local memory and are never exported or replaced by an import.
     },
     extras: getBackupExtras(),
   };
@@ -432,7 +436,17 @@ export default function SettingsPage() {
     const imported = { ...(d.settings as Partial<Settings>), pushEnabled: settings.pushEnabled, onboarded: true };
     // normalisePersisted keeps the built-in spots, fills missing arrays (diets, allergies…) and
     // merges settings and profile over the defaults, the same as the store's own migrate.
-    useLarder.setState({ ...normalisePersisted({ ...d, settings: { ...settings, ...imported } }), undo: null });
+    // A file without staples keeps the current ones; barcode memory belongs to this device and is always kept.
+    const current = useLarder.getState();
+    useLarder.setState({
+      ...normalisePersisted({
+        ...d,
+        settings: { ...settings, ...imported },
+        staples: d.staples ?? current.staples,
+        barcodes: current.barcodes,
+      }),
+      undo: null,
+    });
     if (pendingImport.extras !== undefined) applyBackupExtras(pendingImport.extras);
     setPendingImport(null);
     toast(`Restored ${d.items.length} item${d.items.length === 1 ? "" : "s"} and your settings`);
