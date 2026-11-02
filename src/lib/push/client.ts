@@ -15,7 +15,11 @@ import { notificationSupport } from "@/lib/reminders";
 import { browserTimeZone } from "@/lib/push/schedule";
 import type { Settings } from "@/lib/types";
 
-const VAPID_PUBLIC_KEY = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "").trim().replace(/^["']|["']$/g, "");
+const VAPID_PUBLIC_KEY = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "")
+  .trim()
+  .replace(/^["']|["']$/g, "")
+  .replace(/^NEXT_PUBLIC_VAPID_PUBLIC_KEY=/, "")
+  .replace(/^["']|["']$/g, "");
 /** The endpoint this device saved on the server, when background reminders are on. */
 const ENDPOINT_KEY = "larder-push-endpoint";
 /** Set once the first-add prompt has been shown, so it never nags. */

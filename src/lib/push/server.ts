@@ -40,7 +40,9 @@ export function missingPushEnv(env: NodeJS.ProcessEnv = process.env): string[] {
 
 /** Pasted env values often carry spaces, newlines or quotes; the push keys must be exact. */
 export function cleanEnv(v: string): string {
-  return v.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+  // Also drop a pasted "NAME=" prefix (copying a whole .env line into the value box).
+  const unquote = (x: string) => x.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+  return unquote(unquote(v).replace(/^[A-Z][A-Z0-9_]*=/, ""));
 }
 
 export function pushConfig(env: NodeJS.ProcessEnv = process.env): PushConfig | null {

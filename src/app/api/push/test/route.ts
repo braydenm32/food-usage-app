@@ -69,7 +69,7 @@ export async function POST(request: Request) {
       {
         error: "failed",
         message: config
-          ? `The reminder server's notification keys don't look right${why?.status ? ` (push service said ${why.status})` : ""}. Check the VAPID settings.`
+          ? `The reminder server's notification keys don't look right${why?.status ? ` (push service said ${why.status})` : why?.message ? `: ${why.message}` : ""}. Check the VAPID settings.`
           : "Couldn't reach this device's notification service. Try again in a minute.",
         detail: why,
       },
