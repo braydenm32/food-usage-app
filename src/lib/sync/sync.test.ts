@@ -310,6 +310,12 @@ describe("validating records from the server", () => {
     expect(parseIncoming("savedRecipes", "r", recipe)).toMatchObject({ id: "r", ingredients: [{ name: "Leek" }], steps: ["Cook"] });
     expect(parseIncoming("savedRecipes", "r", { ...recipe, ingredients: "leek" })).toBeNull();
     expect(parseIncoming("savedRecipes", "r", { ...recipe, sourceUrl: "javascript:alert(1)" })).not.toHaveProperty("sourceUrl");
+    const credit = { name: "Wikibooks Cookbook", url: "https://en.wikibooks.org/wiki/Cookbook:Soup", licence: "CC BY-SA 4.0", licenceUrl: "javascript:x" };
+    expect(parseIncoming("savedRecipes", "r", { ...recipe, credit })).toMatchObject({
+      credit: { name: "Wikibooks Cookbook", url: "https://en.wikibooks.org/wiki/Cookbook:Soup", licence: "CC BY-SA 4.0" },
+    });
+    expect((parseIncoming("savedRecipes", "r", { ...recipe, credit }) as { credit: object }).credit).not.toHaveProperty("licenceUrl");
+    expect(parseIncoming("savedRecipes", "r", { ...recipe, credit: { url: "https://x.com" } })).not.toHaveProperty("credit");
 
     const line = { name: "Milk", foodTypeId: null, aisle: "Dairy, Eggs & Fridge", checked: false, addedAt: at };
     expect(parseIncoming("shoppingList", "l", line)).toMatchObject({ id: "l", name: "Milk" });

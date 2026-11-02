@@ -9,7 +9,8 @@ import { toast } from "@/components/toast";
 import { RecipeCard, RecipeCardSkeleton } from "@/components/recipes/recipe-card";
 import { ImportSheet } from "@/components/recipes/import-sheet";
 import { BUILTIN_RECIPES } from "@/lib/recipes/builtin";
-import { cacheRecipes } from "@/lib/recipes/cache";
+import { cacheRecipes, readAiIdeas, saveAiIdeas } from "@/lib/recipes/cache";
+import { MoreIdeasLinks } from "@/components/recipes/more-ideas";
 import { allergenHits, analyseRecipe, isRecipeAllowed, rankRecipes, scoreOf, type RankedRecipe } from "@/lib/recipes/suggest";
 import { useItemViews } from "@/lib/selectors";
 import { useLarder } from "@/lib/store";
@@ -130,18 +131,31 @@ function RecipesView() {
     state: "idle",
     recipes: [],
   });
+  // The exact request doubles as the cache key: same larder, same household, same pick -> same ideas.
+  const aiBody = useMemo(
+    () =>
+      JSON.stringify({
+        items: views.filter((v) => v.expiry.status !== "expired").slice(0, 40).map((v) => ({ name: v.item.name, daysLeft: v.expiry.daysLeft })),
+        profile,
+        mustUse: useItem ? [views.find((v) => v.item.id === useItem)?.item.name].filter(Boolean) : undefined,
+        count: 3,
+      }),
+    [views, profile, useItem],
+  );
+  // Show the ideas already paid for today, rather than asking again.
+  const [aiRestoredFor, setAiRestoredFor] = useState<string | null>(null);
+  if (hydrated && aiRestoredFor !== aiBody && ai.state === "idle") {
+    setAiRestoredFor(aiBody);
+    const cached = readAiIdeas(aiBody);
+    if (cached?.length) setAi({ state: "done", recipes: cached });
+  }
   async function getIdeas() {
     setAi((a) => ({ ...a, state: "loading", message: undefined }));
     try {
       const res = await fetch("/api/recipes", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          items: views.filter((v) => v.expiry.status !== "expired").slice(0, 40).map((v) => ({ name: v.item.name, daysLeft: v.expiry.daysLeft })),
-          profile,
-          mustUse: useItem ? [views.find((v) => v.item.id === useItem)?.item.name].filter(Boolean) : undefined,
-          count: 3,
-        }),
+        body: aiBody,
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 503) {
@@ -150,6 +164,7 @@ function RecipesView() {
       }
       if (!res.ok) return setAi({ state: "error", recipes: [], message: data.message });
       cacheRecipes(data.recipes);
+      saveAiIdeas(aiBody, data.recipes);
       setAi({ state: "done", recipes: data.recipes });
     } catch {
       setAi({ state: "error", recipes: [], message: "You seem to be offline. The built-in recipes below still work." });
@@ -169,11 +184,21 @@ function RecipesView() {
     const term = libraryTerm;
     setLibLoading(true);
     try {
-      const res = await fetch(`/api/recipes/search?ingredient=${encodeURIComponent(term)}&limit=6`);
-      if (!res.ok) throw new Error("bad");
-      const d = (await res.json()) as { recipes: Recipe[] };
-      cacheRecipes(d.recipes);
-      setLib({ term, recipes: d.recipes, failed: false });
+      // Two openly usable libraries, asked together; either one answering is enough.
+      const ask = async (url: string) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("bad");
+        return ((await res.json()) as { recipes: Recipe[] }).recipes;
+      };
+      const q = encodeURIComponent(term);
+      const [mealDb, wiki] = await Promise.allSettled([ask(`/api/recipes/search?ingredient=${q}&limit=4`), ask(`/api/recipes/wikibooks?ingredient=${q}&limit=4`)]);
+      if (mealDb.status === "rejected" && wiki.status === "rejected") throw new Error("bad");
+      const a = mealDb.status === "fulfilled" ? mealDb.value : [];
+      const b = wiki.status === "fulfilled" ? wiki.value : [];
+      const recipes: Recipe[] = [];
+      for (let i = 0; i < Math.max(a.length, b.length); i++) recipes.push(...[a[i], b[i]].filter((r): r is Recipe => !!r));
+      cacheRecipes(recipes);
+      setLib({ term, recipes, failed: false });
     } catch {
       rememberLibFailed();
       setLibFailed(true);
@@ -397,7 +422,7 @@ function RecipesView() {
                 <SectionTitle>More from the recipe library</SectionTitle>
                 {lib?.term === libraryTerm && !lib.failed ? (
                   <>
-                    <p className="-mt-1 mb-3 text-sm text-ink-2">Recipes using {libraryTerm.toLowerCase()}, from TheMealDB.</p>
+                    <p className="-mt-1 mb-3 text-sm text-ink-2">Recipes using {libraryTerm.toLowerCase()}, from TheMealDB and the Wikibooks Cookbook.</p>
                     {libAllowed.length === 0 ? (
                       <p className="text-sm text-ink-2">
                         {lib.recipes.length === 0 ? `Nothing in the library for ${libraryTerm.toLowerCase()} yet.` : "None of them suit your household."}
@@ -423,7 +448,7 @@ function RecipesView() {
                   <p className="text-sm text-ink-2">The online recipe library can&apos;t be reached right now. Check your connection and try again later.</p>
                 ) : (
                   <div className="rounded-[var(--radius-card)] border border-line bg-surface p-4">
-                    <p className="text-[15px] text-ink-2">Look up recipes that use {libraryTerm.toLowerCase()} on TheMealDB. This sends the ingredient name over the internet.</p>
+                    <p className="text-[15px] text-ink-2">Look up recipes that use {libraryTerm.toLowerCase()} in two free recipe libraries, TheMealDB and the Wikibooks Cookbook. This sends the ingredient name over the internet.</p>
                     <Button variant="secondary" className="mt-3" onClick={findOnline}>
                       <Globe size={18} aria-hidden /> Find more online
                     </Button>
@@ -431,6 +456,8 @@ function RecipesView() {
                 )}
               </>
             )}
+
+            <MoreIdeasLinks term={(useItem && views.find((v) => v.item.id === useItem)?.item.name) || libraryTerm} />
           </>
         ) : (
           <div className="mt-4">

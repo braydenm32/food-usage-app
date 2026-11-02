@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarPlus, CircleAlert, Clock, Users } from "lucide-react";
+import { BookOpen, CalendarPlus, CircleAlert, Clock, Sparkles, Users } from "lucide-react";
 import { Card, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
 import { stockCount, type RankedRecipe } from "@/lib/recipes/suggest";
@@ -50,6 +50,15 @@ export function RecipeCard({
             <li className="inline-flex items-center gap-1">
               <Users size={14} aria-hidden /> Serves {recipe.servings}
             </li>
+            {recipe.source === "ai" ? (
+              <li className="inline-flex items-center gap-1">
+                <Sparkles size={14} aria-hidden /> Larder original
+              </li>
+            ) : recipe.credit ? (
+              <li className="inline-flex items-center gap-1">
+                <BookOpen size={14} aria-hidden /> {recipe.credit.name}
+              </li>
+            ) : null}
             {showUses &&
               atRisk.slice(0, 3).map((u) => (
                 <li key={u.itemId}>
