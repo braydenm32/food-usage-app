@@ -40,6 +40,16 @@ describe("meal plan shopping", () => {
     ]);
     expect(needs.some((n) => n.foodTypeId === "beef-mince")).toBe(false);
   });
+
+  it("doesn't count food past its use-by, or frozen past its date, as on hand", () => {
+    const mince = item("Beef mince", "beef-mince", 1000, "g");
+    const off = { item: mince, expiry: { status: "expired" as const, daysLeft: -1, estimated: true } };
+    expect(planShoppingNeeds([{ recipe: bol }], [off]).some((n) => n.foodTypeId === "beef-mince")).toBe(true);
+    const good = { item: mince, expiry: { status: "fresh" as const, daysLeft: 2, estimated: true } };
+    expect(planShoppingNeeds([{ recipe: bol }], [good]).some((n) => n.foodTypeId === "beef-mince")).toBe(false);
+    const frozenOff = { ...mince, expiredWhenFrozen: true };
+    expect(planShoppingNeeds([{ recipe: bol }], [frozenOff]).some((n) => n.foodTypeId === "beef-mince")).toBe(true);
+  });
 });
 
 describe("recipe amounts on the shopping list", () => {

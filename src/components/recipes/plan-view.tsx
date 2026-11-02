@@ -68,7 +68,6 @@ export function PlanView() {
   const setSettings = useLarder((s) => s.setSettings);
   const mealPlan = useLarder((s) => s.mealPlan);
   const savedRecipes = useLarder((s) => s.savedRecipes);
-  const items = useLarder((s) => s.items);
   const people = useLarder((s) => s.profile.people);
   const unplanMeal = useLarder((s) => s.unplanMeal);
   const setPlanCooked = useLarder((s) => s.setPlanCooked);
@@ -94,17 +93,19 @@ export function PlanView() {
   const recipeFor = (m: MealPlanEntry) => local.get(m.recipeId) ?? fetched.get(m.recipeId) ?? null;
   const servingsFor = (m: MealPlanEntry, r: Recipe) => m.servings ?? r.servings ?? people;
 
-  // Only meals not cooked yet still need shopping.
+  // Only meals from today on, not cooked yet, still need shopping (last Monday's skipped dinner doesn't).
   const needs = useMemo(() => {
+    const todayISO = toLocalISODate(today);
     const meals = weekEntries
-      .filter((m) => !m.cookedAt)
+      .filter((m) => !m.cookedAt && m.date >= todayISO)
       .map((m) => {
         const r = local.get(m.recipeId) ?? fetched.get(m.recipeId);
         return r ? { recipe: r, servings: m.servings ?? r.servings } : null;
       })
       .filter((x): x is { recipe: Recipe; servings: number } => !!x);
-    return planShoppingNeeds(meals, items, shoppingList);
-  }, [weekEntries, local, fetched, items, shoppingList]);
+    // Views, so food past its use-by doesn't count as on hand.
+    return planShoppingNeeds(meals, views, shoppingList);
+  }, [weekEntries, local, fetched, views, shoppingList, today]);
 
   const addMissing = () => {
     if (needs.length === 0) return;

@@ -5,7 +5,7 @@ import type { PantryItem, Recipe, RecipeIngredient, ShoppingListItem } from "@/l
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { CATCH_ALL_IDS, familyOf } from "./families";
 import { addAmounts, convertToItemUnit, formatAmount, ingredientName, scaleIngredient, tbspOf } from "./quantity";
-import { ingredientMatchesItem, isStaple } from "./suggest";
+import { ingredientMatchesItem, isStaple, usableForCooking, type RankableItem } from "./suggest";
 
 export interface ListEntry {
   name: string;
@@ -80,8 +80,14 @@ function groupKey(ing: RecipeIngredient): string {
 /**
  * What the week's planned meals need that the larder doesn't have: each food's total across the
  * meals (scaled to each meal's servings), minus what's on hand, with staples left out.
+ *
+ * `stock` is item views (preferred: food past its use-by, or frozen past its date, doesn't count
+ * as on hand) or plain items (only items frozen past their date are left out).
  */
-export function planShoppingNeeds(meals: PlannedMeal[], items: PantryItem[], list: ShoppingListItem[] = []): PlanNeed[] {
+export function planShoppingNeeds(meals: PlannedMeal[], stock: Array<PantryItem | RankableItem>, list: ShoppingListItem[] = []): PlanNeed[] {
+  const items: PantryItem[] = stock
+    .filter((x) => ("expiry" in x ? usableForCooking(x) : !x.expiredWhenFrozen))
+    .map((x) => ("expiry" in x ? x.item : x));
   const groups = new Map<
     string,
     { ing: RecipeIngredient; total: { quantity?: number; unit?: string }; tbsp: 15 | 20; recipeIds: string[]; titles: string[] }
