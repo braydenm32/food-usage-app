@@ -43,6 +43,13 @@ describe("I cooked this: starting deductions", () => {
     ]);
   });
 
+  it("spills only onto the candidates it is given, in their order", () => {
+    const recipe: Recipe = { id: "r", title: "Mince", source: "builtin", servings: 4, ingredients: [ing("beef mince", 500, "g", "beef-mince")], steps: [], tags: [] };
+    const items = [item("Beef mince", "beef-mince", 300, "g", "a"), item("Off mince", "beef-mince", 500, "g", "off"), item("Beef mince", "beef-mince", 500, "g", "c")];
+    const rows = planDeductions(recipe, [{ itemId: "a", ingredient: "beef mince" }], items, 1, ingredientMatchesItem, () => [items[2]]);
+    expect(rows.map((r) => r.itemId)).toEqual(["a", "c"]);
+  });
+
   it("spag bol for 2 doesn't wipe out whole bags and bottles", () => {
     const bol = getBuiltinRecipe("builtin-spag-bol")!;
     const larder = [

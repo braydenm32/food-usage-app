@@ -23,9 +23,13 @@ const SPOT_NAME: Record<StorageKind, string> = { pantry: "pantry", fridge: "frid
 
 const HIGH_RISK =
   /\b(meat|mince|chicken|chook|fish|prawns?|shrimps?|seafood|fillets?|steaks?|sausages?|snags?|pork|lamb|beef|veal|kangaroo|roo|turkey|duck|chops?|cutlets?|mussels?|oysters?|squid|calamari|octopus|cuttlefish|salmon|tuna|sardines?|mackerel|barramundi|barra|flathead|trout|whiting|bream|snapper|cod|basa|hoki|ling|dory|kingfish|mahi ?mahi|swordfish|tilapia|crab|lobster|crayfish|yabbies|marron|scallops?|clams?|pipis|vongole|goat|mutton|venison|rabbit|quail|wings?|drumsticks?|thighs?|brisket|rissoles?|meatballs?|patt(?:y|ies)|burgers?|offal|liver)\b/i;
-/** Tinned, dried and cured foods that share a word with raw meat or fish ("tuna in springwater", "beef jerky"). */
+/**
+ * Tinned, dried and cured foods that share a word with raw meat or fish ("tuna in springwater",
+ * "beef jerky"). Kept narrow on purpose: words like "sauce", "flavour" or "dog" also turn up in
+ * raw foods ("Chicken fillets in teriyaki sauce", "Hot dog sausages"), which must stay cautious.
+ */
 const SHELF_STABLE =
-  /\b(tins?|tinned|cans?|canned|in (?:spring ?water|brine|oil)|springwater|pouch|sachet|jerky|biltong|dried|stock|broth|powder|flavou?r(?:ed)?|seasoning|sauce|paste|pet|dog|cat|chips|crackers?|noodles?)\b/i;
+  /\b(tins?|tinned|cans?|canned|in (?:spring ?water|brine|oil)|springwater|jerky|biltong|dried|stock|broth|powder|(?:fish|oyster) sauce|prawn crackers?|(?:instant|2 ?minute) noodles?)\b/i;
 
 /**
  * True when free text looks like raw meat or seafood, which must be kept cold and used fast.

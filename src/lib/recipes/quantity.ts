@@ -258,6 +258,11 @@ export function planDeductions(
   items: PantryItem[],
   factor: number,
   matches: (ing: RecipeIngredient, item: PantryItem) => boolean,
+  /**
+   * Items to spill onto for an ingredient, best first. Without it, any matching item in
+   * `items` order. The cook sheet passes `spillCandidates` (usable stock, best match, soonest first).
+   */
+  candidates?: (ing: RecipeIngredient) => PantryItem[],
 ): DeductionRow[] {
   const tbsp = tbspOf(recipe);
   const taken = new Set(uses.map((u) => u.itemId));
@@ -273,7 +278,7 @@ export function planDeductions(
     if (need === null || need <= item.quantity * 1.02) continue;
     // What fraction of the recipe amount is still to find.
     let left = 1 - item.quantity / need;
-    for (const next of items) {
+    for (const next of candidates ? candidates(ing) : items) {
       if (left <= 0.02) break;
       if (taken.has(next.id) || !matches(ing, next)) continue;
       const part = defaultDeduction({ ...ing, quantity: (ing.quantity ?? 0) * left, quantityMax: undefined }, next, factor, tbsp);

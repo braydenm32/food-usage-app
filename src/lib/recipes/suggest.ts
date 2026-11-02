@@ -6,7 +6,8 @@ import { isRecipeAllowed, likeCount, type FilterProfile } from "./filter";
 /** The slice of an ItemView that ranking needs (keeps this module free of the store). */
 export interface RankableItem {
   item: PantryItem;
-  expiry: { status: ItemStatus; daysLeft: number };
+  /** `estimated` is optional so callers that only rank can leave it out; an expired item without it isn't usable. */
+  expiry: { status: ItemStatus; daysLeft: number; estimated?: boolean };
 }
 
 export interface RecipeUse {
@@ -122,7 +123,23 @@ export function ingredientMatchesItem(ing: RecipeIngredient, item: PantryItem): 
  */
 export function usableForCooking(v: RankableItem): boolean {
   if (v.expiry.status !== "expired") return true;
-  return v.item.dateKind === "best-before" && !v.item.expiredWhenFrozen;
+  // Only a printed best-before is a quality date. An estimate that has run out is "check it",
+  // and so is anything that went into the freezer already past its date.
+  return v.item.dateKind === "best-before" && v.expiry.estimated === false && !v.item.expiredWhenFrozen;
+}
+
+/**
+ * Where "I cooked this" takes the rest of an ingredient when the first item runs short:
+ * usable stock only, the closest match first, then the one that needs using soonest.
+ */
+export function spillCandidates(views: RankableItem[]): (ing: RecipeIngredient) => PantryItem[] {
+  return (ing) =>
+    views
+      .filter(usableForCooking)
+      .map((v) => ({ v, q: matchIngredient(ing, v.item) }))
+      .filter((x): x is { v: RankableItem; q: MatchQuality | "name" } => x.q !== null)
+      .sort((a, b) => MATCH_RANK[a.q] - MATCH_RANK[b.q] || a.v.expiry.daysLeft - b.v.expiry.daysLeft)
+      .map((x) => x.v.item);
 }
 
 /* ---------- dietary filtering (see filter.ts) ---------- */

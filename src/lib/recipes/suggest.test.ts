@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ItemStatus, PantryItem, Recipe } from "@/lib/types";
-import { analyseRecipe, exclusionReason, isStaple, labelChecks, matchIngredient, rankRecipes, type RankableItem } from "./suggest";
+import { analyseRecipe, exclusionReason, isStaple, labelChecks, matchIngredient, rankRecipes, spillCandidates, type RankableItem } from "./suggest";
 import { BUILTIN_RECIPES } from "./builtin";
 
 function view(name: string, status: ItemStatus, daysLeft = 1, id = `id-${name}`, extra: Partial<PantryItem> = {}): RankableItem {
@@ -153,11 +153,28 @@ describe("matching larder items to ingredients", () => {
 
   it("still uses food past its best-before date, flagged to check", () => {
     const rec = r("bb", "Toast", ["bread"]);
-    const a = analyseRecipe(rec, [view("bread", "expired", -1)]);
+    const printed = (v: RankableItem): RankableItem => ({ ...v, expiry: { ...v.expiry, estimated: false } });
+    const a = analyseRecipe(rec, [printed(view("bread", "expired", -1))]);
     expect(a.uses).toHaveLength(1);
     expect(a.uses[0].pastBestBefore).toBe(true);
     expect(a.atRisk).toHaveLength(1);
     expect(analyseRecipe(rec, [view("bread", "expired", -1, "x", { dateKind: "use-by" })]).uses).toHaveLength(0);
+    // An estimate that ran out, or food frozen past its date, is "check it", not a quality date.
+    expect(analyseRecipe(rec, [view("bread", "expired", -1)]).uses).toHaveLength(0);
+    expect(analyseRecipe(rec, [printed(view("bread", "expired", -1, "y", { expiredWhenFrozen: true }))]).uses).toHaveLength(0);
+  });
+
+  it("spills onto usable stock only, closest match and soonest first", () => {
+    const tv = (id: string, foodTypeId: string, status: ItemStatus, daysLeft: number, extra: Partial<PantryItem> = {}) =>
+      view(id, status, daysLeft, id, { foodTypeId, ...extra });
+    const pick = spillCandidates([
+      tv("skim", "milk-skim", "fresh", 5),
+      tv("fc6", "milk-full-cream", "fresh", 6),
+      tv("fc1", "milk-full-cream", "use-soon", 1),
+      tv("off", "milk-full-cream", "expired", -2, { dateKind: "use-by" }),
+      tv("oat", "milk-oat", "use-today", 0),
+    ]);
+    expect(pick(ing("milk", "milk-full-cream") as Recipe["ingredients"][number]).map((i) => i.id)).toEqual(["fc1", "fc6", "skim", "oat"]);
   });
 });
 

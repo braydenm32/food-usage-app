@@ -6,7 +6,8 @@ import { StatusPill } from "@/components/freshness";
 import { toast } from "@/components/toast";
 import { useLarder } from "@/lib/store";
 import { formatAmount, planDeductions, stepFor } from "@/lib/recipes/quantity";
-import { ingredientMatchesItem } from "@/lib/recipes/suggest";
+import { ingredientMatchesItem, spillCandidates } from "@/lib/recipes/suggest";
+import { useItemViews } from "@/lib/selectors";
 import { formatQuantity } from "@/components/pantry/format";
 import { getFoodType } from "@/lib/shelf-life/foods";
 import { storageDays } from "@/lib/shelf-life/engine";
@@ -45,7 +46,12 @@ function CookSheetInner({ open, onClose, recipe, uses, factor, onCooked }: Props
   const cookRecipe = useLarder((s) => s.cookRecipe);
 
   // One row per matched item, plus a second item when the first doesn't have enough.
-  const plan = useMemo(() => planDeductions(recipe, uses, items, factor, ingredientMatchesItem), [recipe, uses, items, factor]);
+  // Spills go to usable stock only (never past a use-by), closest match and soonest first.
+  const views = useItemViews();
+  const plan = useMemo(
+    () => planDeductions(recipe, uses, items, factor, ingredientMatchesItem, spillCandidates(views)),
+    [recipe, uses, items, factor, views],
+  );
   const rows = useMemo(
     () =>
       plan

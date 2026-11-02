@@ -55,6 +55,13 @@ describe("unknown-food fallback", () => {
     for (const name of ["Mango chutney", "Tuna in springwater", "Tinned sardines", "Beef jerky", "Chicken stock", "Fish sauce"]) {
       expect(isHighRisk(name), name).toBe(false);
     }
+    // Words like sauce, flavour, dog or chips don't make raw meat shelf stable.
+    for (const name of ["Hot Dog Sausages", "Chicken Fillets in Teriyaki Sauce", "Honey soy flavoured chicken wings", "Pork belly with chilli paste", "Fish and chips crumbed fillets", "Beef sausages with cheese"]) {
+      expect(isHighRisk(name), name).toBe(true);
+    }
+    for (const name of ["Oyster sauce", "Prawn crackers", "Chicken 2 minute noodles", "Beef stock powder", "Dried shrimp", "Tuna in oil", "Canned salmon"]) {
+      expect(isHighRisk(name), name).toBe(false);
+    }
     expect(defaultsForUnknown("Beef strips")).toMatchObject({ locationId: "fridge", dateKind: "use-by", days: 2, highRisk: true });
     expect(expiry(item({ name: "Beef strips" }), FRIDGE).daysLeft).toBe(2);
     // Raw meat left on the bench: use it today.
