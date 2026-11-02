@@ -174,7 +174,7 @@ export function needsStaples(recipe: Recipe): boolean {
   return recipe.ingredients.some((i) => !i.optional && isStaple(i));
 }
 
-const useWeight = (u: RecipeUse) => (u.pastBestBefore ? PAST_BEST_BEFORE_WEIGHT : STATUS_WEIGHT[u.status]);
+const weightOf = (u: RecipeUse) => (u.pastBestBefore ? PAST_BEST_BEFORE_WEIGHT : STATUS_WEIGHT[u.status]);
 
 /** "You have 6 of 9": ingredients that count (not optional, not staples) and how many are in the larder. */
 export function stockCount(a: Pick<RankedRecipe, "recipe" | "missing">): { have: number; total: number } {
@@ -183,7 +183,7 @@ export function stockCount(a: Pick<RankedRecipe, "recipe" | "missing">): { have:
 }
 
 export function scoreOf(a: Omit<RankedRecipe, "score">): number {
-  return a.uses.reduce((s, u) => s + useWeight(u), 0) - a.missing.length;
+  return a.uses.reduce((s, u) => s + weightOf(u), 0) - a.missing.length;
 }
 
 /**
@@ -228,7 +228,7 @@ export function spreadCoverage(ranked: RankedRecipe[]): RankedRecipe[] {
     for (let i = 0; i < pool.length; i++) {
       const r = pool[i];
       let v = r.score;
-      for (const u of r.atRisk) v -= useWeight(u) * (1 - 0.6 ** (covered.get(u.itemId) ?? 0));
+      for (const u of r.atRisk) v -= weightOf(u) * (1 - 0.6 ** (covered.get(u.itemId) ?? 0));
       if (v > bestV + 1e-9 || (Math.abs(v - bestV) < 1e-9 && tieBreak(r, pool[bestI]) < 0)) {
         bestV = v;
         bestI = i;

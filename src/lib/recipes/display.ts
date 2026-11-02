@@ -49,7 +49,29 @@ export function recipeImage(recipe: Recipe): string | undefined {
   return recipe.id.startsWith("db-") && recipe.image ? recipe.image : undefined;
 }
 
-const TINTS = ["bg-primary-soft", "bg-soon-soft", "bg-fresh-soft", "bg-today-soft"] as const;
+const titleKey = (t: string) =>
+  t
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z ]+/g, " ")
+    .split(/\s+/)
+    .filter((w) => w && !["the", "a", "an", "and", "with", "recipe", "easy", "best", "classic", "homemade"].includes(w))
+    .map((w) => (w.length > 3 ? w.replace(/s$/, "") : w))
+    .sort()
+    .join(" ");
+
+/** Drop near-identical titles ("Banana split" twice, "Banana Bread" and "Easy banana bread"). */
+export function dedupeByTitle<T extends { title: string }>(recipes: T[]): T[] {
+  const seen = new Set<string>();
+  return recipes.filter((r) => {
+    const k = titleKey(r.title);
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+const TINTS =["bg-primary-soft", "bg-soon-soft", "bg-fresh-soft", "bg-today-soft"] as const;
 
 /** A designed stand-in for a photo: the main ingredient's emoji (or the title's initial) on a soft tint. */
 export function recipePlaceholder(recipe: Recipe): { emoji?: string; initial: string; tint: (typeof TINTS)[number] } {
