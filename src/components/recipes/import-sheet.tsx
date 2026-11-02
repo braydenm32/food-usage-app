@@ -202,6 +202,7 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
             Serves {preview.servings}
             {preview.minutes ? ` · ${preview.minutes} min` : ""} · {preview.ingredients.length} ingredients · {preview.steps.length} steps
           </p>
+          <p className="text-sm text-ink-3">Saved for your household&apos;s own cooking, with a link back to the author.</p>
           {preview.ingredients.some((i) => i.unit === "tbsp") && (
             <div>
               <p className="mb-1.5 text-sm font-medium text-ink">Which tablespoon does it use?</p>

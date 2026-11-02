@@ -24,6 +24,7 @@ npm run build && npm start
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Reading receipt and list photos, AI recipe ideas, smarter order-email parsing. Without it the app still works: paste, barcode and manual add, built-in recipes. |
 | `LARDER_AI_MODEL` | Override the model (default `claude-haiku-5-5`). |
+| `THEMEALDB_API_KEY` | TheMealDB supporter key. Without it the shared test key is used, which is fine for development; get a supporter key before a public launch. |
 | `NEXT_PUBLIC_SUPABASE_URL` | Accounts, household sharing and sync between devices (see below). |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The project's publishable key (safe in the browser; data is protected by row-level security). |
 
@@ -62,3 +63,7 @@ Code: `src/lib/sync/` (pure diff/outbox/apply logic with tests, plus the engine)
 - `docs/BUILD_BRIEF.md` — design direction and quality bar.
 
 Shelf-life estimates are guidance only. Always trust printed use-by dates and your senses.
+
+## Recipe sources and licences
+
+Larder only stores and shows recipes it is allowed to: its own built-in recipes, AI-written "Larder originals", [TheMealDB](https://www.themealdb.com/) (credited on each recipe) and the [Wikibooks Cookbook](https://en.wikibooks.org/wiki/Cookbook:Table_of_Contents) (CC BY-SA 4.0; each recipe names the page, links its contributors and the licence, and says it was reformatted). Big recipe sites such as taste.com.au and RecipeTin Eats don't allow reuse, so Larder only links to their search pages. Recipes a person imports from a link stay in their own household's box with a link back to the author.

@@ -48,7 +48,8 @@ Rules:
 - Strictly respect the diets, allergies and dislikes. Never include an allergen or disliked food, even as an optional extra.
 - Steps are short, imperative sentences. 4 to 7 steps. Titles are plain dish names, no marketing words.
 - Use simple ingredient names without brands ("beef mince", not "Coles beef mince 500g"). Quantity null when it is "to taste".
-- Give each recipe 2 to 4 lowercase tags such as vegetarian, gluten-free, quick, freezer-friendly, dinner, lunch.`;
+- Give each recipe 2 to 4 lowercase tags such as vegetarian, gluten-free, quick, freezer-friendly, dinner, lunch.
+- Write every recipe in your own words. Never reproduce or closely paraphrase a published recipe, and never name a chef, cookbook or recipe website.`;
 
 /** GET /api/recipes tells the page whether AI ideas are available, so it can hide the button when not. */
 export async function GET() {

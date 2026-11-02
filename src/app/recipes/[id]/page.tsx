@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, ExternalLink, Pencil, Timer, ShoppingBasket, Users, ChefHat, Trash2 } from "lucide-react";
+import { Bookmark, BookmarkCheck, CalendarPlus, ChevronLeft, CircleAlert, Clock, CookingPot, Pencil, Timer, ShoppingBasket, Users, ChefHat, Trash2 } from "lucide-react";
 import { Button, Card, EmptyState, Field, Input, SectionTitle, Sheet, Stepper, buttonClass, cx } from "@/components/ui";
 import { StatusPill, STATUS_META } from "@/components/freshness";
 import { toast } from "@/components/toast";
@@ -13,7 +13,8 @@ import { EditRecipeSheet } from "@/components/recipes/edit-recipe-sheet";
 import { RecipeNutritionCard } from "@/components/nutrition/recipe-nutrition";
 import { useCookTimers } from "@/lib/cook-timers";
 import { getBuiltinRecipe } from "@/lib/recipes/builtin";
-import { readCachedRecipe, cacheRecipes } from "@/lib/recipes/cache";
+import { readCachedRecipe, cacheRecipes, refetchUrl } from "@/lib/recipes/cache";
+import { RecipeCreditLine } from "@/components/recipes/recipe-credit";
 import { convertToItemUnit, formatAmount, scaleIngredient, tbspOf } from "@/lib/recipes/quantity";
 import { allergenHits, analyseRecipe, dislikeHits, exclusionReason, isStaple, stockCount } from "@/lib/recipes/suggest";
 import { getFoodType } from "@/lib/shelf-life/foods";
@@ -44,9 +45,9 @@ function RecipeLoader() {
   // Database recipes can be re-fetched when opened from a bookmark or a fresh tab.
   const [fetched, setFetched] = useState<{ id: string; recipe: Recipe | null } | null>(null);
   useEffect(() => {
-    if (!hydrated || local || !id.startsWith("db-")) return;
+    if (!hydrated || local || !refetchUrl(id)) return;
     let live = true;
-    fetch(`/api/recipes/search?id=${encodeURIComponent(id.slice(3))}`)
+    fetch(refetchUrl(id)!)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d: { recipes: Recipe[] }) => {
         if (!live) return;
@@ -60,7 +61,7 @@ function RecipeLoader() {
   }, [hydrated, local, id]);
 
   const recipe = local ?? (fetched?.id === id ? fetched.recipe : null);
-  const loading = !hydrated || (!local && id.startsWith("db-") && fetched?.id !== id);
+  const loading = !hydrated || (!local && !!refetchUrl(id) && fetched?.id !== id);
 
   if (loading) {
     return (
@@ -361,14 +362,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
               </li>
             ))}
           </ol>
-          {recipe.sourceUrl && (
-            <p className="mt-6 text-sm text-ink-3">
-              <a href={recipe.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 underline-offset-2 hover:underline">
-                Original recipe <ExternalLink size={12} aria-hidden />
-              </a>
-              {recipe.source === "database" && " (TheMealDB)"}
-            </p>
-          )}
+          <RecipeCreditLine recipe={recipe} />
         </section>
       </div>
 

@@ -16,6 +16,7 @@ import type {
   MealPlanEntry,
   PantryItem,
   Recipe,
+  RecipeCredit,
   RecipeIngredient,
   ShelfLifeOverride,
   ShoppingListItem,
@@ -199,11 +200,20 @@ function parseIngredient(v: unknown): RecipeIngredient | null {
   };
 }
 
+function parseCredit(v: unknown): RecipeCredit | undefined {
+  if (!isObj(v) || !isStr(v.name)) return undefined;
+  return {
+    ...pick(v, { url: isWebUrl, licence: isStr, licenceUrl: isWebUrl, authorsUrl: isWebUrl, changes: isStr }),
+    name: v.name,
+  } as RecipeCredit;
+}
+
 function parseRecipe(id: string, d: Obj): Recipe | null {
   if (!isStr(d.title) || !isRecipeSource(d.source) || !isNum(d.servings)) return null;
   if (!Array.isArray(d.ingredients) || !Array.isArray(d.steps)) return null;
   return {
     ...pick(d, { sourceUrl: isWebUrl, image: isWebUrl, minutes: isNum, summary: isStr, savedAt: isDate, tbspMl: (x) => x === 15 || x === 20 }),
+    ...(parseCredit(d.credit) ? { credit: parseCredit(d.credit) } : {}),
     id,
     title: d.title,
     source: d.source,

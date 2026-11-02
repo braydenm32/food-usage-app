@@ -157,11 +157,28 @@ export interface RecipeIngredient {
   optional?: boolean;
 }
 
+/** Who a recipe comes from and the terms it was shared under, shown on the recipe page. */
+export interface RecipeCredit {
+  /** Where it came from: "TheMealDB", "Wikibooks Cookbook". */
+  name: string;
+  /** The recipe's page at that source. */
+  url?: string;
+  /** Licence short name, e.g. "CC BY-SA 4.0". */
+  licence?: string;
+  licenceUrl?: string;
+  /** Page listing the people who wrote it (Wikibooks page history). */
+  authorsUrl?: string;
+  /** Set when Larder changed the text, e.g. "Reformatted for Larder". */
+  changes?: string;
+}
+
 export interface Recipe {
   id: string;
   title: string;
   source: "ai" | "database" | "saved" | "builtin";
   sourceUrl?: string;
+  /** Attribution for recipes Larder shows from an open source. */
+  credit?: RecipeCredit;
   image?: string;
   servings: number;
   minutes?: number;

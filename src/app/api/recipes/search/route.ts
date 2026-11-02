@@ -3,7 +3,13 @@ import type { Recipe } from "@/lib/types";
 import { ingredient, splitSteps } from "@/lib/recipes/map";
 
 
-const BASE = "https://www.themealdb.com/api/json/v1/1";
+/**
+ * TheMealDB's shared test key is "1". Before a public launch, set THEMEALDB_API_KEY to a
+ * supporter key (https://www.themealdb.com/api.php), which its terms expect for production apps.
+ */
+const KEY = process.env.THEMEALDB_API_KEY?.trim() || "1";
+const VERSION = KEY === "1" ? "v1" : "v2";
+const BASE = `https://www.themealdb.com/api/json/${VERSION}/${encodeURIComponent(KEY)}`;
 const WEEK = 60 * 60 * 24 * 7;
 
 interface MealSummary {
@@ -35,6 +41,8 @@ function mapMeal(m: MealFull): Recipe {
     title: m.strMeal,
     source: "database",
     sourceUrl: m.strSource || `https://www.themealdb.com/meal/${m.idMeal}`,
+    // TheMealDB's terms ask apps to name it as the source of its data and images.
+    credit: { name: "TheMealDB", url: `https://www.themealdb.com/meal/${m.idMeal}` },
     image: m.strMealThumb,
     servings: 4,
     ingredients,
