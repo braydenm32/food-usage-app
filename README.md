@@ -27,6 +27,9 @@ npm run build && npm start
 | `THEMEALDB_API_KEY` | TheMealDB supporter key. Without it the shared test key is used, which is fine for development; get a supporter key before a public launch. |
 | `NEXT_PUBLIC_SUPABASE_URL` | Accounts, household sharing and sync between devices (see below). |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The project's publishable key (safe in the browser; data is protected by row-level security). |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Background reminders (Web Push), with the two below. See "Background reminders". |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server only. Lets the reminder sender read each household's food. Never expose it to the browser. |
+| `CRON_SECRET` | Server only. Protects `/api/push/send`, the hourly reminder sender. |
 
 Copy `.env.example` to `.env.local` and fill in what you need. Without the Supabase variables Larder is purely local: everything stays in the browser and Sync and share says sync isn't set up.
 
@@ -53,6 +56,36 @@ Code: `src/lib/sync/` (pure diff/outbox/apply logic with tests, plus the engine)
 - **Email templates:** sign-in uses a one-time code so it works inside an installed app (a magic link would open the browser instead). Add the code to both the **Magic link** and **Confirm signup** templates, for example `<p>Your Larder code is <strong>{{ .Token }}</strong></p>`, keeping `{{ .ConfirmationURL }}` as a fallback link. Keep the email OTP length at 6.
 - **SMTP:** the built-in email sender is heavily rate-limited (a few emails an hour). Set up custom SMTP before inviting real households.
 - **Google (optional):** enable the Google provider with a Google Cloud OAuth client whose authorised redirect URI is `https://<project-ref>.supabase.co/auth/v1/callback`. Until it's enabled, "Continue with Google" says so instead of failing.
+
+## Background reminders (Web Push)
+
+People with an account in a household get their reminder digest as a push notification at the hour they chose, in their own time zone, even when Larder is closed. Without an account (or until this is set up) reminders show when Larder is opened after that hour, and a missed weekly one shows on the next open. Settings says which applies.
+
+How it works: when someone allows notifications (from Settings, or the prompt after their first add), the device subscribes with the VAPID public key and saves the subscription plus its reminder time, zone, cadence and "use soon" days through the `save_push_subscription` RPC into `push_subscriptions` (row-level security: people see and delete only their own rows; leaving a household removes its subscriptions). Every hour `/api/push/send` finds the subscriptions whose slot has passed since they last got one, builds each household's digest from its synced food with the same shelf-life engine as the app, and sends it with `web-push`. Expired subscriptions are removed. Code: `src/lib/push/`, `src/app/api/push/`, `public/sw.js`.
+
+### Setting it up
+
+1. Apply `supabase/migrations/20261102000000_push_subscriptions.sql` (with the others, `supabase db push`).
+2. Generate a key pair once: `npx web-push generate-vapid-keys`. Keep it: changing the keys stops existing subscriptions, and people would need to turn reminders off and on again.
+3. In Vercel (Project → Settings → Environment Variables), set:
+   - `NEXT_PUBLIC_VAPID_PUBLIC_KEY`: the public key.
+   - `VAPID_PRIVATE_KEY`: the private key.
+   - `VAPID_SUBJECT`: a contact for push services, `mailto:you@example.com` or your site's URL.
+   - `SUPABASE_SERVICE_ROLE_KEY`: Supabase dashboard → Project Settings → API keys → `service_role` (or a secret key).
+   - `CRON_SECRET`: any long random string (`openssl rand -hex 32`).
+   Redeploy afterwards: the public key is built into the client.
+4. Schedule the sender. `vercel.json` runs `/api/push/send` at the top of every hour, and Vercel Cron sends `Authorization: Bearer $CRON_SECRET` itself. Vercel's Hobby plan only runs cron jobs once a day, so on Hobby use another scheduler instead, for example Supabase `pg_cron` with `pg_net`:
+   ```sql
+   select cron.schedule('larder-reminders', '0 * * * *', $$
+     select net.http_post(
+       url := 'https://<your-site>/api/push/send',
+       headers := jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>')
+     );
+   $$);
+   ```
+5. Check it: sign in, turn on Settings → Reminders → Notifications, then tap "Send a test". You can also call the sender by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-site>/api/push/send` returns how many were checked, due and sent.
+
+iPhone and iPad only receive web push once Larder is added to the Home Screen and opened from there (iOS 16.4 or later).
 
 ## Project layout
 
