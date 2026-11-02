@@ -645,8 +645,9 @@ export const useLarder = create<LarderState>()(
                 if (sum) {
                   const i = list.indexOf(existing);
                   list[i] = { ...existing, ...sum };
+                  continue;
                 }
-                continue;
+                // Units that can't be added (1 bunch + 200 g): keep both rows rather than lose one.
               }
               const food = e.foodTypeId ? getFoodType(e.foodTypeId) : undefined;
               list.push({
@@ -663,7 +664,8 @@ export const useLarder = create<LarderState>()(
           set((s) => ({ shoppingList: s.shoppingList.map((l) => (l.id === id ? { ...l, checked: !l.checked } : l)) })),
         updateListItem: (id, patch) =>
           set((s) => ({ shoppingList: s.shoppingList.map((l) => (l.id === id ? { ...l, ...patch } : l)) })),
-        removeListItem: (id) => set((s) => ({ shoppingList: s.shoppingList.filter((l) => l.id !== id) })),
+        removeListItem: (id) =>
+          act("Removed from the list", (s) => ({ shoppingList: s.shoppingList.filter((l) => l.id !== id) })),
         clearChecked: () =>
           act("Cleared ticked items", (s) => ({ shoppingList: s.shoppingList.filter((l) => !l.checked) })),
 

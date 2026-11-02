@@ -208,4 +208,17 @@ describe("addToList merging", () => {
     s().addToList([e]);
     expect(s().shoppingList[0].quantity).toBe(500);
   });
+  it("keeps both rows when the units can't be added", () => {
+    s().addToList([{ name: "Coriander", foodTypeId: null, quantity: 1, unit: "bunch" }]);
+    s().addToList([{ name: "Coriander", foodTypeId: null, quantity: 20, unit: "g" }]);
+    expect(s().shoppingList.map((l) => `${l.quantity} ${l.unit}`)).toEqual(["1 bunch", "20 g"]);
+  });
+  it("removing a row can be undone", () => {
+    s().addToList([{ name: "Milk", foodTypeId: null }, { name: "Bread", foodTypeId: null }]);
+    const milk = s().shoppingList[0];
+    s().removeListItem(milk.id);
+    expect(s().shoppingList.map((l) => l.name)).toEqual(["Bread"]);
+    s().performUndo();
+    expect(s().shoppingList.map((l) => l.name)).toEqual(["Milk", "Bread"]);
+  });
 });
