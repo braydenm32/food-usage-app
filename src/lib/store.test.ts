@@ -174,12 +174,12 @@ describe("freezing", () => {
 
 describe("overrides", () => {
   it("caps learned days for use-by and high-risk foods at 1.5× the table", () => {
-    expect(clampOverride({ foodTypeId: "beef-mince", fridgeDays: 10 }).fridgeDays).toBe(4);
+    expect(clampOverride({ foodTypeId: "beef-mince", fridgeDays: 10 }).fridgeDays).toBe(3);
     expect(clampOverride({ foodTypeId: "milk-full-cream", pantryDays: 20 }).pantryDays).toBeUndefined();
     // Low-risk foods are left alone.
     expect(clampOverride({ foodTypeId: "apple-red", fridgeDays: 60 }).fridgeDays).toBe(60);
     s().setOverride({ foodTypeId: "beef-mince", fridgeDays: 9 });
-    expect(s().overrides["beef-mince"].fridgeDays).toBe(4);
+    expect(s().overrides["beef-mince"].fridgeDays).toBe(3);
   });
 });
 

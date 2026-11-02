@@ -28,9 +28,16 @@ describe("FOOD_TYPES data", () => {
   });
 
   it("keeps raw meat and seafood to the household fridge rules", () => {
-    // Chicken, fish, mince and sausage-like: 3 days, 2 once opened. Whole red meat cuts: 5 and 3.
-    const short = ["beef-mince", "chicken-breast", "chicken-wings", "sausages", "salmon-fillet", "tuna-steak", "fish-whole", "seafood-marinara", "kangaroo-mince", "rabbit", "soup-bones", "beef-schnitzel"];
+    // Raw mince, poultry, fish, patties and seafood: 2 days (owner decision). Rabbit and schnitzel: 3.
+    // Whole red meat cuts: 5, and 3 once opened.
+    const twoDay = ["beef-mince", "pork-mince", "chicken-mince", "chicken-breast", "chicken-thigh", "chicken-whole", "chicken-wings", "duck", "turkey", "sausages", "burger-patties", "salmon-fillet", "barramundi", "white-fish", "tuna-steak", "fish-whole", "prawns-raw", "calamari", "seafood-marinara", "kangaroo-mince", "soup-bones"];
+    const short = ["rabbit", "beef-schnitzel"];
     const cuts = ["steak-rump", "beef-diced", "lamb-chops", "kangaroo-steak", "corned-beef", "goat-meat"];
+    for (const id of twoDay) {
+      const f = FOOD_TYPES.find((x) => x.id === id);
+      expect(f, id).toMatchObject({ dateKind: "use-by", fridgeDays: 2, pantryDays: null });
+      expect(f!.openedDays, id).toBeLessThanOrEqual(2);
+    }
     for (const id of short) {
       const f = FOOD_TYPES.find((x) => x.id === id);
       expect(f, id).toMatchObject({ dateKind: "use-by", fridgeDays: 3, openedDays: 2, pantryDays: null });
@@ -160,12 +167,46 @@ describe("matchFoodType", () => {
     ["tuna steaks", "tuna-steak"],
     ["chorizo", "chorizo"],
     ["pastry", "pastry-sheets"],
+    // Added from the audit
+    ["shallots", "shallot"],
+    ["french shallots", "shallot"],
+    ["spring onions", "spring-onion"],
+    ["labneh", "labneh"],
+    ["fetta", "cheese-feta"],
+    ["pak choy", "bok-choy"],
+    ["daikon", "daikon"],
+    ["radishes", "radish"],
+    // Cooked and leftover lines only match cooked food
+    ["cooked lentils", "cooked-veg"],
+    ["leftover lentils", "cooked-veg"],
+    ["cooked potatoes", "cooked-veg"],
+    ["cooked chicken", "cooked-chicken"],
+    ["cooked prawns", "prawns-cooked"],
+    ["leftover lasagne", "leftovers-meal"],
+    ["homemade soup", "soup-cooked"],
+    ["homemade pesto", "soup-cooked"],
   ];
   for (const [text, id] of cases) {
     it(`"${text}" -> ${id}`, () => {
       expect(matchFoodType(text)?.food.id).toBe(id);
     });
   }
+});
+
+describe("weak matches", () => {
+  it("needs four letters for a prefix match", () => {
+    expect(matchFoodType("LOL")).toBeUndefined();
+    expect(matchFoodType("BABY SPIN 120G")?.food.id).toBe("baby-spinach");
+  });
+
+  it("gives whole melons, sourdough and soft herbs sensible defaults", () => {
+    const f = (id: string) => FOOD_TYPES.find((x) => x.id === id)!;
+    for (const id of ["watermelon", "rockmelon", "honeydew"]) expect(f(id).fridgeDays, id).toBe(10);
+    expect(f("sourdough").pantryDays).toBe(4);
+    expect(f("basil").defaultLocation).toBe("fridge");
+    expect(f("shallot").defaultLocation).toBe("pantry");
+    expect(f("cream-thickened").freezerDays).not.toBeNull();
+  });
 });
 
 describe("normalise", () => {
