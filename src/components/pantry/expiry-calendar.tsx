@@ -152,7 +152,7 @@ export function ExpiryCalendar({
         {pickedViews.length === 0 ? (
           <p className="py-3 text-sm text-ink-3">{picked === todayIso ? "Nothing runs out today." : "Nothing runs out that day."}</p>
         ) : (
-          <ul className="-mx-2 flex flex-col">
+          <ul className="-mx-2 flex flex-col divide-y divide-line">
             {pickedViews.map((v) => (
               <ItemRow key={v.item.id} view={v} showLocation={showLocation} onOpen={onOpen} focusFallback={focusFallback} />
             ))}

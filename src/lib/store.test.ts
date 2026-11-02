@@ -7,6 +7,7 @@ import {
   normalisePersisted,
   opensWhenUsed,
   useLarder,
+  type UndoSnapshot,
 } from "./store";
 import { computeExpiry } from "./shelf-life/engine";
 import { getFoodType } from "./shelf-life/foods";
@@ -87,7 +88,7 @@ describe("undo", () => {
     const created = s().addItems(Array.from({ length: 12 }, (_, i) => draft({ name: `I${i}` })), "manual");
     for (const c of created) s().consumeItem(c.id, "all", "binned");
     let n = 0;
-    for (let u = s().undo; u; u = u.prev) n++;
+    for (let u: UndoSnapshot | null | undefined = s().undo; u; u = u.prev) n++;
     expect(n).toBe(8);
     useLarder.setState({ undo: null });
     expect(s().performUndo()).toBe(0);

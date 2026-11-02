@@ -178,6 +178,9 @@ export function clampOverride(o: ShelfLifeOverride): ShelfLifeOverride {
   return out;
 }
 
+/** An answer in the weekly "Fridge check". */
+export type ReconcileAnswer = "used" | "binned" | "half" | "keep";
+
 export interface CookDeduction {
   itemId: string;
   /** Amount used, in the item's unit. */
@@ -220,6 +223,13 @@ export interface LarderState {
   consumeItem: (id: string, quantity: number | "all", how: "used" | "binned") => void;
   /** Use or bin several whole items as one undoable step. */
   consumeMany: (ids: string[], how: "used" | "binned") => void;
+  /**
+   * Apply a "Fridge check" in one undoable step: each item was eaten (all used), binned,
+   * is about half gone, or is still there. Returns how many were used and binned.
+   */
+  /** Move several whole items as one undoable step. Returns how many moved. */
+  moveMany: (ids: string[], locationId: string) => number;
+  reconcileItems: (answers:{ id: string; answer: ReconcileAnswer }[]) => { used: number; binned: number; half: number };
   deleteItem: (id: string) => void;
   /** `leftovers` adds a new item in the same undo step (the cook sheet's "Save leftovers"). */
   cookRecipe: (recipe: Recipe, deductions: CookDeduction[], leftovers?: DraftItem) => void;
@@ -572,6 +582,58 @@ export const useLarder = create<LarderState>()(
             items: s.items.filter((i) => !gone.has(i.id)),
             events: [...s.events, ...results.map((r) => r.event)],
           }));
+        },
+
+        moveMany: (ids, locationId) => {
+          const state = get();
+          const to = state.locations.find((l) => l.id === locationId);
+          if (!to) return 0;
+          const patches = new Map<string, PantryItem>();
+          const events: ItemEvent[] = [];
+          for (const id of ids) {
+            const item = state.items.find((i) => i.id === id);
+            if (!item || item.locationId === locationId) continue;
+            const from = state.locations.find((l) => l.id === item.locationId);
+            const next: PantryItem = { ...item, locationId };
+            if (to.kind === "freezer" && from?.kind !== "freezer") {
+              next.frozenAt = nowISO();
+              next.thawedAt = undefined;
+              if (!item.expiredWhenFrozen && pastDateWhenFrozen(item, state, item.locationId)) next.expiredWhenFrozen = true;
+            } else if (from?.kind === "freezer" && to.kind !== "freezer") {
+              next.thawedAt = nowISO();
+            }
+            patches.set(id, next);
+            events.push(makeEvent(item, "moved", { detail: `${from?.name ?? "?"} → ${to.name}`, locationId }));
+          }
+          if (patches.size === 0) return 0;
+          act(`Moved ${patches.size} item${patches.size === 1 ? "" : "s"} to ${to.name}`, (s) => ({
+            items: s.items.map((i) => patches.get(i.id) ?? i),
+            events: [...s.events, ...events],
+          }));
+          return patches.size;
+        },
+
+        reconcileItems: (answers) => {
+          const out = { used: 0, binned: 0, half: 0 };
+          const s0 = get();
+          const results: NonNullable<ReturnType<typeof consumePatch>>[] = [];
+          for (const { id, answer } of answers) {
+            if (answer === "keep") continue;
+            const item = s0.items.find((i) => i.id === id);
+            if (!item) continue;
+            const q = answer === "half" ? Math.round((item.quantity / 2) * 1000) / 1000 : "all";
+            const r = consumePatch(s0, id, q, answer === "binned" ? "binned" : "used");
+            if (!r) continue;
+            results.push(r);
+            out[answer]++;
+          }
+          if (results.length === 0) return out;
+          const byId = new Map(results.map((r) => [r.item.id, r.next]));
+          act(`Fridge check: ${results.length} updated`, (s) => ({
+            items: s.items.flatMap((i) => (byId.has(i.id) ? (byId.get(i.id) ? [byId.get(i.id)!] : []) : [i])),
+            events: [...s.events, ...results.map((r) => r.event)],
+          }));
+          return out;
         },
 
         deleteItem: (id) => {

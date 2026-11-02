@@ -233,6 +233,8 @@ export interface Settings {
   useSoonDays: number;
   mealPlannerEnabled: boolean;
   onboarded: boolean;
+  /** When the weekly "Fridge check" on Today was last done (ISO date-time). */
+  fridgeCheckAt?: string;
 }
 
 /** A line read from a receipt, list, order or barcode, awaiting review. */

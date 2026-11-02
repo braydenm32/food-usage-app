@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpDown, CalendarDays, ChartPie, ChevronDown, Search, X } from "lucide-react";
+import { ArrowUpDown, CalendarDays, CheckCheck, ChevronDown, FolderInput, ListChecks, Search, Trash, X } from "lucide-react";
 import { useLarder } from "@/lib/store";
 import { useItemViews, type ItemView } from "@/lib/selectors";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -14,6 +14,8 @@ import { ItemSheet } from "@/components/item-sheet";
 import { ItemRow } from "@/components/pantry/item-row";
 import { LocationIcon } from "@/components/pantry/location-icon";
 import { focusRow } from "@/components/pantry/focus";
+import { binMany, markManyUsed, moveMany } from "@/components/pantry/actions";
+import { OverflowMenu } from "@/components/pantry/overflow-menu";
 import { ExpiryCalendar } from "@/components/pantry/expiry-calendar";
 import { useNow } from "@/lib/use-now";
 
@@ -71,6 +73,21 @@ const GROUP_TITLES: Record<ItemStatus, string> = {
 };
 const GROUP_ORDER: ItemStatus[] = ["expired", "use-today", "use-soon", "fresh"];
 
+/** `?due=soon` (from Today's "Eat me first") and `?due=week` filter by date. */
+type Due = "soon" | "week";
+const DUE_LABEL: Record<Due, string> = { soon: "Use soon or today", week: "Due in the next 7 days" };
+function matchesDue(v: ItemView, due: Due | null): boolean {
+  if (!due) return true;
+  if (due === "soon") return v.expiry.status === "use-soon" || v.expiry.status === "use-today";
+  return v.expiry.daysLeft >= 0 && v.expiry.daysLeft <= 7;
+}
+
+/** Multi-select in the larder: which rows are picked, and whether select mode is on. */
+interface Selection {
+  active: boolean;
+  ids: Set<string>;
+}
+
 export default function PantryPage() {
   return (
     <Suspense fallback={<PantrySkeleton />}>
@@ -104,6 +121,32 @@ function Pantry() {
 
   const locParam = params.get("loc");
   const loc = locParam && locations.some((l) => l.id === locParam) ? locParam : "all";
+  const dueParam = params.get("due");
+  const due: Due | null = dueParam === "soon" || dueParam === "week" ? dueParam : null;
+  const [sel, setSel] = useState<Selection>({ active: false, ids: new Set() });
+  const endSelect = useCallback(() => setSel({ active: false, ids: new Set() }), []);
+  const selection = useMemo(
+    () => ({
+      start: (id: string) => setSel({ active: true, ids: new Set([id]) }),
+      toggle: (id: string) =>
+        setSel((s) => {
+          const ids = new Set(s.ids);
+          if (ids.has(id)) ids.delete(id);
+          else ids.add(id);
+          return { active: true, ids };
+        }),
+    }),
+    [],
+  );
+  // Escape leaves select mode.
+  useEffect(() => {
+    if (!sel.active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector("dialog[open]")) endSelect();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [sel.active, endSelect]);
   const now = useNow();
   const [query, setQuery] = useState("");
   const [sort, setSortState] = useState<SortMode>(readSort);
@@ -116,6 +159,7 @@ function Pantry() {
   useSlashToSearch(searchRef);
 
   const setLoc = (id: string) => router.replace(id === "all" ? "/pantry" : `/pantry?loc=${encodeURIComponent(id)}`, { scroll: false });
+  const clearDue = () => router.replace(loc === "all" ? "/pantry" : `/pantry?loc=${encodeURIComponent(loc)}`, { scroll: false });
 
   const counts = useMemo(() => {
     const m = new Map<string, number>();
@@ -128,12 +172,19 @@ function Pantry() {
     const list = views.filter(
       (v) =>
         (loc === "all" || v.item.locationId === loc) &&
+        matchesDue(v, due) &&
         (!q || v.item.name.toLowerCase().includes(q) || v.food?.name.toLowerCase().includes(q)),
     );
     if (sort === "az") return [...list].sort((a, b) => a.item.name.localeCompare(b.item.name));
     if (sort === "recent") return [...list].sort((a, b) => b.item.addedAt.localeCompare(a.item.addedAt));
     return list; // already most urgent first
-  }, [views, loc, query, sort]);
+  }, [views, loc, query, sort, due]);
+  // Selected rows that still exist and are on screen.
+  const picked = useMemo(() => shown.filter((v) => sel.ids.has(v.item.id)).map((v) => v.item.id), [shown, sel.ids]);
+  const rowSelection = useCallback(
+    (id: string) => ({ active: sel.active, selected: sel.ids.has(id), toggle: selection.toggle, start: selection.start }),
+    [sel, selection],
+  );
 
   // Rows in on-screen order, so focus can land on a neighbour when the sheet removes an item.
   const order = useMemo(
@@ -172,14 +223,18 @@ function Pantry() {
         subtitle={total === 0 ? "Everything you've got, in one place" : `${total} ${total === 1 ? "item" : "items"} across ${locations.length} spots`}
         showSettings
         actions={
-          <Link
-            href="/insights"
-            aria-label="Insights"
-            title="Insights"
-            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
-          >
-            <ChartPie size={22} aria-hidden />
-          </Link>
+          total > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-11"
+              aria-pressed={sel.active}
+              onClick={() => (sel.active ? endSelect() : setSel({ active: true, ids: new Set() }))}
+            >
+              <ListChecks size={18} aria-hidden />
+              {sel.active ? "Done" : "Select"}
+            </Button>
+          ) : undefined
         }
       />
       <div className="px-5 lg:px-0">
@@ -204,28 +259,28 @@ function Pantry() {
             <div
               role="group"
               aria-label="Where"
-              className="scrollbar-none fade-x -mx-5 flex gap-2 overflow-x-auto px-5 py-1 lg:mx-0 lg:flex-wrap lg:px-0 lg:[-webkit-mask-image:none]! lg:[mask-image:none]!"
+              className="scrollbar-none fade-x -mx-5 flex snap-x gap-2 overflow-x-auto scroll-px-5 px-5 py-1 lg:mx-0 lg:flex-wrap lg:px-0 lg:[-webkit-mask-image:none]! lg:[mask-image:none]!"
             >
-              <Chip selected={loc === "all"} onClick={() => setLoc("all")}>
-                All <span className="tabular-nums opacity-70">{total}</span>
+              <Chip selected={loc === "all"} onClick={() => setLoc("all")} className="snap-start">
+                All <span className="font-semibold tabular-nums">{total}</span>
               </Chip>
               {locations.map((l) => (
-                <Chip key={l.id} selected={loc === l.id} onClick={() => setLoc(l.id)}>
+                <Chip key={l.id} selected={loc === l.id} onClick={() => setLoc(l.id)} className="snap-start">
                   <LocationIcon kind={l.kind} />
-                  {l.name} <span className="tabular-nums opacity-70">{counts.get(l.id) ?? 0}</span>
+                  {l.name} <span className="font-semibold tabular-nums">{counts.get(l.id) ?? 0}</span>
                 </Chip>
               ))}
             </div>
 
-            <div className="mt-3 flex items-center gap-2">
-              <div className="relative min-w-0 flex-1">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="relative min-w-0 flex-1 basis-48">
                 <Search size={18} aria-hidden className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-3" />
                 <Input
                   ref={searchRef}
                   type="search"
                   aria-label="Search the larder"
                   aria-keyshortcuts="/"
-                  placeholder="Search the larder"
+                  placeholder="Search"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="pl-11 pr-11 [&::-webkit-search-cancel-button]:hidden"
@@ -243,6 +298,15 @@ function Pantry() {
               </div>
               <SortSelect value={sort} onChange={setSort} />
             </div>
+            {due && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-ink-2">
+                <span>Showing:</span>
+                <Chip selected onClick={clearDue} aria-label={`${DUE_LABEL[due]}. Show everything`}>
+                  {DUE_LABEL[due]}
+                  <X size={14} aria-hidden />
+                </Chip>
+              </div>
+            )}
 
             <h2 id="larder-items" tabIndex={-1} className="sr-only">
               {location ? `${location.name} items` : "All items"}
@@ -262,6 +326,17 @@ function Pantry() {
                     action={
                       <Button variant="secondary" onClick={() => setQuery("")}>
                         Clear search
+                      </Button>
+                    }
+                  />
+                ) : due ? (
+                  <EmptyState
+                    emoji="🌿"
+                    title="Nothing due right now"
+                    body="Everything here has a few days left."
+                    action={
+                      <Button variant="secondary" onClick={clearDue}>
+                        Show everything
                       </Button>
                     }
                   />
@@ -287,16 +362,34 @@ function Pantry() {
                 GROUP_ORDER.map((status) => {
                   const group = shown.filter((v) => v.expiry.status === status);
                   if (group.length === 0) return null;
-                  return <Group key={status} status={status} views={group} showLocation={loc === "all"} onOpen={openSheet} />;
+                  return (
+                    <Group key={status} status={status} views={group} showLocation={loc === "all"} onOpen={openSheet} selection={rowSelection} />
+                  );
                 })
               ) : (
-                <ul className="-mx-2 flex flex-col">
+                <ul className="-mx-2 flex flex-col divide-y divide-line">
                   {shown.map((v) => (
-                    <ItemRow key={v.item.id} view={v} showLocation={loc === "all"} onOpen={openSheet} focusFallback={listHeading} />
+                    <ItemRow
+                      key={v.item.id}
+                      view={v}
+                      showLocation={loc === "all"}
+                      onOpen={openSheet}
+                      focusFallback={listHeading}
+                      selection={rowSelection(v.item.id)}
+                    />
                   ))}
                 </ul>
               )}
             </div>
+            {sel.active && (
+              <SelectBar
+                ids={picked}
+                total={shown.length}
+                onAll={() => setSel({ active: true, ids: new Set(shown.map((v) => v.item.id)) })}
+                onDone={endSelect}
+                locations={locations}
+              />
+            )}
           </>
         )}
       </div>
@@ -305,16 +398,87 @@ function Pantry() {
   );
 }
 
+/** The bar for acting on several selected items at once. One Undo covers each action. */
+function SelectBar({
+  ids,
+  total,
+  onAll,
+  onDone,
+  locations,
+}: {
+  ids: string[];
+  total: number;
+  onAll: () => void;
+  onDone: () => void;
+  locations: { id: string; name: string; kind: "pantry" | "fridge" | "freezer" }[];
+}) {
+  const n = ids.length;
+  const run = (fn: () => void) => {
+    fn();
+    onDone();
+    setTimeout(() => listHeading()?.focus(), 50);
+  };
+  return (
+    <div
+      data-toast-avoid
+      role="region"
+      aria-label="Selected items"
+      className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-20 -mx-2 mt-4 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-line bg-surface p-2 shadow-card lg:bottom-4"
+    >
+      <p className="min-w-0 flex-1 basis-28 px-2 text-sm font-semibold text-ink" aria-live="polite">
+        {n === 0 ? "Tap items to select" : `${n} selected`}
+      </p>
+      {n < total && (
+        <Button size="sm" variant="ghost" className="h-11" onClick={onAll}>
+          Select all
+        </Button>
+      )}
+      <Button size="sm" className="h-11" disabled={n === 0} onClick={() => run(() => markManyUsed(ids))}>
+        <CheckCheck size={16} aria-hidden />
+        Used
+      </Button>
+      <Button size="sm" variant="secondary" className="h-11" disabled={n === 0} onClick={() => run(() => binMany(ids))}>
+        <Trash size={16} aria-hidden />
+        Bin
+      </Button>
+      {n > 0 ? (
+        <OverflowMenu
+          label="Move selected to"
+          placement="up"
+          trigger={
+            <>
+              <FolderInput size={16} aria-hidden />
+              Move to…
+            </>
+          }
+          triggerClassName={buttonClass("secondary", "sm") + " h-11"}
+          actions={locations.map((l) => ({ label: l.name, onSelect: () => run(() => moveMany(ids, l.id)) }))}
+        />
+      ) : (
+        <Button size="sm" variant="secondary" className="h-11" disabled>
+          <FolderInput size={16} aria-hidden />
+          Move to…
+        </Button>
+      )}
+      <Button size="sm" variant="ghost" className="h-11" onClick={onDone} aria-label="Cancel selecting">
+        <X size={16} aria-hidden />
+      </Button>
+    </div>
+  );
+}
+
 function Group({
   status,
   views,
   showLocation,
   onOpen,
+  selection,
 }: {
   status: ItemStatus;
   views: ItemView[];
   showLocation: boolean;
   onOpen: (id: string) => void;
+  selection: (id: string) => React.ComponentProps<typeof ItemRow>["selection"];
 }) {
   const m = STATUS_META[status];
   const id = `group-${status}`;
@@ -323,11 +487,15 @@ function Group({
       <h2 id={id} className="mb-1 flex items-center gap-2 text-sm font-semibold text-ink-2">
         <m.Icon size={15} aria-hidden className={m.text} strokeWidth={2.5} />
         {GROUP_TITLES[status]}
-        <span className="font-normal text-ink-3">{views.length}</span>
+        <span className="font-normal text-ink-3">
+          <span className="sr-only">, </span>
+          {views.length}
+          <span className="sr-only"> {views.length === 1 ? "item" : "items"}</span>
+        </span>
       </h2>
-      <ul className="-mx-2 flex flex-col">
+      <ul className="-mx-2 flex flex-col divide-y divide-line">
         {views.map((v) => (
-          <ItemRow key={v.item.id} view={v} showLocation={showLocation} onOpen={onOpen} focusFallback={listHeading} />
+          <ItemRow key={v.item.id} view={v} showLocation={showLocation} onOpen={onOpen} focusFallback={listHeading} selection={selection(v.item.id)} />
         ))}
       </ul>
     </section>
