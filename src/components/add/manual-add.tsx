@@ -15,6 +15,12 @@ interface Quick {
   food?: FoodType;
 }
 
+/** A chip's draft. Leftovers get a short name to finish with what was cooked ("Leftovers – chilli"). */
+function quickDraft(food: FoodType): ReviewDraft {
+  const d = foodToDraft(food);
+  return food.id === "leftovers-meal" ? { ...d, name: "Leftovers" } : d;
+}
+
 /** Search box with autocomplete, recent items and free text. Each pick adds a line to the list below. */
 export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
   const [query, setQuery] = useState("");
@@ -32,8 +38,10 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
 
   // Recently added foods, newest first; staples when there's no history yet.
   const quick = useMemo<Quick[]>(() => {
-    const seen = new Set<string>();
-    const out: Quick[] = [];
+    // Leftovers always lead: after cooking or meal prep there's nothing to search for.
+    const leftovers = getFoodType("leftovers-meal");
+    const seen = new Set<string>(leftovers ? [leftovers.id] : []);
+    const out: Quick[] = leftovers ? [{ key: leftovers.id, label: "Leftovers", emoji: leftovers.emoji, food: leftovers }] : [];
     for (let i = events.length - 1; i >= 0 && out.length < 12; i--) {
       const e = events[i];
       if (e.type !== "added") continue;
@@ -43,7 +51,7 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
       const food = getFoodType(e.foodTypeId);
       out.push({ key: k, label: food?.name ?? e.itemName, emoji: food?.emoji ?? "🛒", food });
     }
-    if (out.length >= 4) return out;
+    if (out.length >= 5) return out;
     for (const f of FOOD_TYPES) {
       if (out.length >= 12) break;
       if (!f.staple || seen.has(f.id)) continue;
@@ -52,7 +60,7 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
     }
     return out;
   }, [events]);
-  const hasHistory = events.some((e) => e.type === "added");
+  const hasHistory = events.some((e) => e.type === "added" && e.foodTypeId !== "leftovers-meal");
 
   function add(picked: ReviewDraft) {
     // Same spot and amount as last time this food was added.
@@ -165,13 +173,13 @@ export function ManualAdd({ onAdd }: { onAdd: (d: ReviewDraft) => void }) {
 
       {!trimmed && quick.length > 0 && (
         <div>
-          <h2 className="mb-2 text-sm font-medium text-ink-2">{hasHistory ? "Add again" : "Common staples"}</h2>
+          <h2 className="mb-2 text-sm font-medium text-ink-2">{hasHistory ? "Add again" : "Common foods"}</h2>
           <div className="scrollbar-none -mx-5 flex gap-2 overflow-x-auto px-5 lg:mx-0 lg:flex-wrap lg:px-0">
             {quick.map((q) => (
               <button
                 key={q.key}
                 type="button"
-                onClick={() => add(q.food ? foodToDraft(q.food) : freeTextDraft(q.label))}
+                onClick={() => add(q.food ? quickDraft(q.food) : freeTextDraft(q.label))}
                 className="inline-flex h-11 shrink-0 items-center gap-2 rounded-full border border-line bg-surface pl-3 pr-4 text-[15px] font-medium text-ink hover:border-primary"
               >
                 <span aria-hidden className="text-lg">

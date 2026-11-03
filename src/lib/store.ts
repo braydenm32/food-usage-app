@@ -763,6 +763,8 @@ export const useLarder = create<LarderState>()(
               unit: leftovers.unit,
               addedAt: nowISO(),
               dateKind: leftovers.dateKind,
+              // Set only when the cook picked a different number of days than the estimate.
+              ...(leftovers.printedDate ? { printedDate: leftovers.printedDate } : {}),
               source: "manual",
             };
             items.push(added);

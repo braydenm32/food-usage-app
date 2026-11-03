@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FOOD_TYPES, matchFoodType, normalise, termKey } from "./foods";
+import { FOOD_TYPES, LEFTOVER_FOOD_IDS, matchFoodType, normalise, termKey } from "./foods";
 
 describe("FOOD_TYPES data", () => {
   it("has unique kebab-case ids", () => {
@@ -45,6 +45,15 @@ describe("FOOD_TYPES data", () => {
     for (const id of cuts) {
       const f = FOOD_TYPES.find((x) => x.id === id);
       expect(f, id).toMatchObject({ dateKind: "use-by", fridgeDays: 5, openedDays: 3, pantryDays: null });
+    }
+  });
+
+  it("keeps cooked leftovers and meal prep to 2 fridge days, like raw mince", () => {
+    for (const id of LEFTOVER_FOOD_IDS) {
+      const f = FOOD_TYPES.find((x) => x.id === id);
+      expect(f, id).toMatchObject({ category: "other", dateKind: "use-by", defaultLocation: "fridge", pantryDays: null });
+      expect(f!.fridgeDays, id).toBe(id === "cooked-rice" ? 1 : 2);
+      expect(f!.openedDays, id).toBeLessThanOrEqual(2);
     }
   });
 

@@ -168,6 +168,21 @@ describe("opening on partial use", () => {
     expect(byId(mince.id).openedAt).toBeUndefined();
     expect(byId(sauce.id).openedAt).toBeDefined();
   });
+
+  it("saves meal-prep leftovers in the fridge as portions with a 2-day use-by", () => {
+    const recipe = { id: "r", title: "Chilli", source: "builtin" as const, servings: 4, ingredients: [], steps: [], tags: [] };
+    const fridge = () => s().locations.find((l) => l.id === "fridge");
+    s().cookRecipe(recipe, [], draft({ name: "Leftovers – Chilli", foodTypeId: "leftovers-meal", unit: "item", quantity: 4 }));
+    const saved = s().items[0];
+    expect(saved).toMatchObject({ locationId: "fridge", quantity: 4, initialQuantity: 4, dateKind: "use-by" });
+    expect(saved.printedDate).toBeUndefined();
+    const info = computeExpiry(saved, { food: getFoodType("leftovers-meal"), location: fridge() });
+    expect(info.daysLeft).toBe(2);
+
+    // A date the cook picked sticks to the item.
+    s().cookRecipe(recipe, [], draft({ name: "Leftovers – Chilli", foodTypeId: "leftovers-meal", unit: "item", quantity: 2, printedDate: "2030-01-03" }));
+    expect(s().items[1].printedDate).toBe("2030-01-03");
+  });
 });
 
 describe("freezing", () => {
