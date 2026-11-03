@@ -10,7 +10,7 @@ import { ingredientMatchesItem, spillCandidates } from "@/lib/recipes/suggest";
 import { useItemViews } from "@/lib/selectors";
 import { formatQuantity } from "@/components/pantry/format";
 import { getFoodType } from "@/lib/shelf-life/foods";
-import { storageDays } from "@/lib/shelf-life/engine";
+import { addDays, storageDays } from "@/lib/shelf-life/engine";
 import type { RecipeUse } from "@/lib/recipes/suggest";
 import type { DraftItem, PantryItem, Recipe } from "@/lib/types";
 import { hasFoodData, recipeNutrition } from "@/lib/nutrition/engine";
@@ -33,6 +33,9 @@ export function CookSheet(props: Props) {
   // Re-mount on open/close so amounts re-prefill from the latest larder.
   return <CookSheetInner key={String(props.open)} {...props} />;
 }
+
+/** Leftovers past this many days in the fridge aren't worth the risk; freeze them instead. */
+const MAX_LEFTOVER_DAYS = 4;
 
 const QUICK: Array<{ label: string; fraction: number }> = [
   { label: "None", fraction: 0 },
@@ -70,7 +73,12 @@ function CookSheetInner({ open, onClose, recipe, uses, factor, onCooked }: Props
 
   const [saveLeftovers, setSaveLeftovers] = useState(false);
   const leftoverFood = getFoodType("leftovers-meal");
-  const leftoverDays = leftoverFood ? storageDays(leftoverFood, undefined, "fridge") : 3;
+  const leftoverOverride = useLarder((s) => s.overrides["leftovers-meal"]);
+  // The household's usual life for leftovers in the fridge (2 days unless they've changed it).
+  const usualDays = storageDays(leftoverFood, leftoverOverride, "fridge", "leftovers");
+  const [leftoverDays, setLeftoverDays] = useState(usualDays);
+  // Meal prep makes several portions; default to the servings cooked so each one can be used in turn.
+  const [portions, setPortions] = useState(() => Math.max(1, Math.round(recipe.servings * factor)));
 
   // Nutrition: log how many servings you ate (only when the food database is in this build).
   const logMeal = useMealLog((s) => s.logMeal);
@@ -116,9 +124,11 @@ function CookSheetInner({ open, onClose, recipe, uses, factor, onCooked }: Props
         foodTypeId: leftoverFood?.id ?? "leftovers-meal",
         emoji: leftoverFood?.emoji ?? "🍲",
         locationId: "fridge",
-        quantity: 1,
+        quantity: portions,
         unit: "item",
         dateKind: leftoverFood?.dateKind ?? "use-by",
+        // A different number of days than usual becomes the item's own date, editable on the item later.
+        printedDate: leftoverDays !== usualDays ? toLocalISODate(addDays(new Date(), leftoverDays)) : undefined,
         include: true,
       };
     }
@@ -128,7 +138,9 @@ function CookSheetInner({ open, onClose, recipe, uses, factor, onCooked }: Props
         changed.map((r) => ({ itemId: r.item.id, quantity: amounts[r.item.id] })),
         leftovers,
       );
-      const tail = leftovers ? `Leftovers saved in the fridge for ${leftoverDays} days` : "";
+      const tail = leftovers
+        ? `${portions === 1 ? "Leftovers" : `${portions} portions`} saved in the fridge for ${leftoverDays} ${leftoverDays === 1 ? "day" : "days"}`
+        : "";
       const message = [summary, tail, logged].filter(Boolean).join(". ");
       if (mealId) {
         // One Undo puts back the larder and takes the meal off the log.
@@ -252,9 +264,30 @@ function CookSheetInner({ open, onClose, recipe, uses, factor, onCooked }: Props
         <Switch
           checked={saveLeftovers}
           onChange={setSaveLeftovers}
-          label="Save leftovers"
-          description={`Adds “Leftovers – ${recipe.title}” to the fridge, good for ${leftoverDays} days.`}
+          label="Save leftovers or meal prep"
+          description={`Adds “Leftovers – ${recipe.title}” to the fridge, with a use-by date so it shows up in your reminders.`}
         />
+        {saveLeftovers && (
+          <div className="flex flex-col gap-3 pb-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[15px] text-ink-2">Portions</span>
+              <Stepper label="portions" value={portions} min={1} onChange={(v) => setPortions(Math.max(1, Math.round(v)))} />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[15px] text-ink-2">Good for</span>
+              <Stepper
+                label="days in the fridge"
+                value={leftoverDays}
+                min={1}
+                onChange={(v) => setLeftoverDays(Math.min(MAX_LEFTOVER_DAYS, Math.max(1, Math.round(v))))}
+                suffix={leftoverDays === 1 ? "day" : "days"}
+              />
+            </div>
+            <p className="text-xs text-ink-3">
+              Cooked food keeps about {usualDays} {usualDays === 1 ? "day" : "days"} in the fridge. Freezing some? Tap the leftovers in your larder and move a few portions to the freezer.
+            </p>
+          </div>
+        )}
       </div>
     </Sheet>
   );

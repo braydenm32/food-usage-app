@@ -9,6 +9,26 @@ export function getFoodType(id: string | null | undefined): FoodType | undefined
   return id ? BY_ID.get(id) : undefined;
 }
 
+/**
+ * Cooked food kept from a meal or a meal-prep session. These keep 2 days in the fridge, the same
+ * household rule as raw mince and chicken (cooked rice is shorter still, at 1 day).
+ */
+export const LEFTOVER_FOOD_IDS: ReadonlySet<string> = new Set([
+  "leftovers-meal",
+  "cooked-rice",
+  "cooked-chicken",
+  "cooked-meat",
+  "cooked-pasta",
+  "cooked-veg",
+  "cooked-legumes",
+  "soup-cooked",
+]);
+
+/** True for home-cooked leftovers and meal prep (see `LEFTOVER_FOOD_IDS`). */
+export function isLeftoverFood(id: string | null | undefined): boolean {
+  return !!id && LEFTOVER_FOOD_IDS.has(id);
+}
+
 /** Words that say nothing about what the food is. */
 const NOISE = new Set([
   "ww", "woolworths", "coles", "aldi", "iga", "essentials", "homebrand", "macro", "organic", "fresh", "free", "range",

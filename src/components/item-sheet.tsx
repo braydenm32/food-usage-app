@@ -6,6 +6,7 @@ import { useLarder } from "@/lib/store";
 import { useIsStaple, useItemView, type ItemView } from "@/lib/selectors";
 import { describeDaysLeft, freezerNotRecommended, isPastDateForFreezing, storageWarning } from "@/lib/shelf-life/engine";
 import type { DateKind, PantryItem } from "@/lib/types";
+import { isLeftoverFood } from "@/lib/shelf-life/foods";
 import { Button, Chip, Input, Segmented, Sheet, Stepper, Switch, cx } from "@/components/ui";
 import { StatusPill } from "@/components/freshness";
 import { formatAUD, formatQuantity, formatShortDate, shareLeft, describeShareLeft } from "@/components/pantry/format";
@@ -308,7 +309,7 @@ function Body({ view, intent }: { view: ItemView; intent?: SheetIntent }) {
 
         <div className="mt-4 flex flex-col gap-3 border-t border-line pt-4">
           <label htmlFor="sheet-printed" className="text-sm font-medium text-ink-2">
-            Date on the pack
+            {isLeftoverFood(item.foodTypeId) ? "Eat by" : "Date on the pack"}
           </label>
           <div className="flex items-center gap-2">
             <Input
