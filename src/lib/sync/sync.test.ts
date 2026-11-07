@@ -126,6 +126,11 @@ describe("outbox", () => {
   it("survives a corrupt saved copy", () => {
     expect(parseMeta("{nope")).toEqual(emptyMeta());
     expect(parseMeta(JSON.stringify({ v: 1, householdId: "h", cursor: 7, outbox: {} })).cursor).toBe(7);
+    expect(parseMeta(JSON.stringify({ v: 1, previous: { userId: 3, householdName: "The Lees" } })).previous).toEqual({
+      userId: null,
+      householdName: "The Lees",
+    });
+    expect(parseMeta(JSON.stringify({ v: 1, previous: "x" })).previous).toBeNull();
   });
 
   it("uploads everything for a new household", () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { createStore, useStore } from "zustand";
-import type { FailedChange } from "@/lib/sync/outbox";
+import type { FailedChange, PreviousBinding } from "@/lib/sync/outbox";
 
 export type SyncState =
   /** This build has no Supabase project configured. */
@@ -30,6 +30,11 @@ export interface SyncStatus {
   failed: FailedChange[];
   /** One-off message for the account screen, e.g. "You were removed from the household". */
   notice: string | null;
+  /**
+   * Not syncing, but the food on this device came from a household (signed out and kept it,
+   * or another account was signed in). Join and start screens default to starting fresh then.
+   */
+  previous: PreviousBinding | null;
 }
 
 export const syncStatusStore = createStore<SyncStatus>(() => ({
@@ -44,6 +49,7 @@ export const syncStatusStore = createStore<SyncStatus>(() => ({
   householdName: null,
   failed: [],
   notice: null,
+  previous: null,
 }));
 
 /** Live sync status for this tab: state, last synced time, pending changes, account and household. */
