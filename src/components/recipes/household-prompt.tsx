@@ -3,7 +3,9 @@
 import { useState, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import { Button, Chip, Input, Sheet, Stepper } from "@/components/ui";
+import { SensitiveConsent } from "@/components/privacy-notices";
 import { DEFAULT_PROFILE, useLarder } from "@/lib/store";
+import { addsSensitive } from "@/lib/sensitive";
 import type { Diet, HouseholdProfile } from "@/lib/types";
 
 const DIETS: Array<{ value: Diet; label: string }> = [
@@ -38,6 +40,12 @@ export function HouseholdPrompt({ open, onDone }: { open: boolean; onDone: () =>
   const [diets, setDiets] = useState<Diet[]>(profile.diets);
   const [allergies, setAllergies] = useState<string[]>(profile.allergies);
   const [draft, setDraft] = useState("");
+  const [consent, setConsent] = useState(false);
+  // Diets and allergies can reveal health or beliefs, so ask once before adding any. Keeping or
+  // removing ones already there needs no tick.
+  const addsNew = addsSensitive(profile, diets, [...allergies, draft]);
+  const needsConsent = addsNew && !profile.sensitiveConsentAt;
+  const canSave = !needsConsent || consent;
 
   const addAllergy = () => {
     const v = draft.trim().replace(/,$/, "");
@@ -54,7 +62,14 @@ export function HouseholdPrompt({ open, onDone }: { open: boolean; onDone: () =>
   const save = () => {
     const pending = draft.trim();
     const all = pending && !allergies.some((a) => a.toLowerCase() === pending.toLowerCase()) ? [...allergies, pending] : allergies;
-    setProfile({ people, diets, allergies: all, confirmed: true });
+    if (!canSave) return;
+    setProfile({
+      people,
+      diets,
+      allergies: all,
+      confirmed: true,
+      ...(needsConsent && consent ? { sensitiveConsentAt: new Date().toISOString() } : {}),
+    });
     onDone();
   };
   const skip = () => {
@@ -72,7 +87,7 @@ export function HouseholdPrompt({ open, onDone }: { open: boolean; onDone: () =>
           <Button variant="secondary" size="lg" onClick={skip}>
             Skip
           </Button>
-          <Button size="lg" className="flex-1" onClick={save}>
+          <Button size="lg" className="flex-1" onClick={save} disabled={!canSave}>
             Save
           </Button>
         </div>
@@ -128,6 +143,7 @@ export function HouseholdPrompt({ open, onDone }: { open: boolean; onDone: () =>
             </Button>
           </div>
         </div>
+        {needsConsent && <SensitiveConsent checked={consent} onChange={setConsent} />}
       </div>
     </Sheet>
   );

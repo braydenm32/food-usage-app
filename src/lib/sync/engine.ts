@@ -36,6 +36,7 @@ import {
   quarantine,
   requeueFailed,
   type OutboxEntry,
+  type PreviousBinding,
   type RecordRow,
   type SyncMeta,
 } from "@/lib/sync/outbox";
@@ -81,6 +82,30 @@ function friendly(e: unknown): SyncError {
 /** Postgres data (22xxx) and integrity (23xxx) errors: the rows are the problem, not the network. */
 const isRowError = (e: unknown) => /^2[23]/.test(String((e as { code?: unknown } | null)?.code ?? ""));
 
+/** The storage-limit triggers (live-record count and byte budget) raise 54000. */
+const isLimitError = (e: unknown) => String((e as { code?: unknown } | null)?.code ?? "") === "54000";
+
+/** Shown while the household is at its storage limit and changes are waiting. */
+export const HOUSEHOLD_FULL_MESSAGE =
+  "This household is full. Delete some old things, recipes or long notes to make room, and your changes will sync.";
+
+/** How long to wait before offering a full household the same changes again. */
+const FULL_RETRY = 5 * 60_000;
+
+/**
+ * Resolve when `p` settles or after `ms`, whichever comes first (never rejects). For clean-up
+ * that shouldn't hold up signing out or reloading for long.
+ */
+export function withTimeout(p: Promise<unknown>, ms = 4000): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    p.then(
+      () => (clearTimeout(timer), resolve()),
+      () => (clearTimeout(timer), resolve()),
+    );
+  });
+}
+
 /** Run with the cross-tab sync lock where the browser has one; otherwise just run. */
 function withSyncLock<T>(task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
@@ -113,6 +138,8 @@ export class SyncEngine {
   private channelFor: string | null = null;
   private active = 0;
   private lastError: SyncError | null = null;
+  /** The household refused changes at its storage limit: only removals go up until a retry. */
+  private full = false;
   private notice: string | null = null;
   private ready = false;
   private verified: string | null = null;
@@ -219,7 +246,9 @@ export class SyncEngine {
       // A different account signed in on this device: don't send its changes to the old household.
       // (Signing out through the app flushes and asks first; this only catches other routes.)
       const dropped = pendingCount(this.meta);
-      this.save({ ...emptyMeta() });
+      // Remember whose household the food here came from, so the new account is steered to
+      // start fresh rather than carry it into a household of its own.
+      this.save({ ...emptyMeta(), previous: { userId: this.meta.userId, householdName: this.meta.householdName } });
       if (dropped > 0) {
         this.notice = `A different account signed in, so ${dropped} change${dropped === 1 ? "" : "s"} that hadn't synced to the previous household won't be sent. Your food is still on this device.`;
       }
@@ -248,6 +277,8 @@ export class SyncEngine {
   kick() {
     if (!this.syncing || !navigator.onLine) return this.publish();
     clearTimeout(this.retryTimer);
+    // At the storage limit: offer the waiting changes once more (room may have been made).
+    this.full = false;
     void this.run(() => this.flushAll());
     void this.run(() => this.pullNow());
   }
@@ -314,8 +345,9 @@ export class SyncEngine {
     if (err.code === "42501" && this.householdId) void this.verifyMembership(this.householdId);
     clearTimeout(this.retryTimer);
     if (!this.syncing) return;
-    // Offline: wait for the `online` event (plus a slow retry in case it never fires).
-    const delay = err.offline ? Math.max(this.retryDelay, 30_000) : this.retryDelay;
+    // Offline: wait for the `online` event (plus a slow retry in case it never fires). Full:
+    // removals still go up as they're made; everything else waits a while, or for "Sync now".
+    const delay = this.full ? FULL_RETRY : err.offline ? Math.max(this.retryDelay, 30_000) : this.retryDelay;
     this.retryDelay = Math.min(this.retryDelay * 2, 60_000);
     this.retryTimer = setTimeout(() => this.kick(), delay);
   }
@@ -323,7 +355,10 @@ export class SyncEngine {
   private async flushAll() {
     while (this.syncing && pendingCount(this.meta) > 0) {
       const hid = this.householdId!;
-      const batch = prepareBatch(nextBatch(this.meta, BATCH), useLarder.getState(), hid);
+      // At the storage limit, only removals go up; the rest stay queued (see onFailure).
+      const entries = nextBatch(this.meta, BATCH, this.full);
+      if (entries.length === 0) throw new SyncError(HOUSEHOLD_FULL_MESSAGE, "54000");
+      const batch = prepareBatch(entries, useLarder.getState(), hid);
       if (batch.tooLarge.length) this.save(quarantine(this.meta, batch.tooLarge, "too-large"));
       if (!(await this.send(hid, batch.entries, batch.rows))) return;
     }
@@ -331,8 +366,10 @@ export class SyncEngine {
 
   /**
    * Upsert one batch. When the database refuses it as data (22xxx/23xxx), halve it until the bad
-   * rows are found, set those aside, and send the rest. Anything else (offline, 5xx, limits)
-   * throws for the usual backoff. False when the binding changed while a request was out.
+   * rows are found, set those aside, and send the rest. At the storage limit (54000), send the
+   * batch's removals on their own, then stop with the household marked full rather than
+   * offering the same batch again and again. Anything else (offline, 5xx) throws for the usual
+   * backoff. False when the binding changed while a request was out.
    */
   private async send(hid: string, entries: OutboxEntry[], rows: RecordRow[]): Promise<boolean> {
     if (rows.length === 0) return true;
@@ -341,6 +378,19 @@ export class SyncEngine {
     });
     if (this.householdId !== hid) return false;
     if (error) {
+      if (isLimitError(error)) {
+        const removals = rows.map((r, i) => i).filter((i) => rows[i].deleted);
+        if (removals.length > 0 && removals.length < rows.length) {
+          const sent = await this.send(
+            hid,
+            removals.map((i) => entries[i]),
+            removals.map((i) => rows[i]),
+          );
+          if (!sent) return false;
+        }
+        this.full = true;
+        throw new SyncError(HOUSEHOLD_FULL_MESSAGE, "54000");
+      }
       if (!isRowError(error)) throw error;
       if (rows.length === 1) {
         this.save(quarantine(this.meta, entries, "rejected"));
@@ -349,6 +399,7 @@ export class SyncEngine {
       const mid = Math.ceil(rows.length / 2);
       return (await this.send(hid, entries.slice(0, mid), rows.slice(0, mid))) && this.send(hid, entries.slice(mid), rows.slice(mid));
     }
+    if (rows.some((r) => !r.deleted)) this.full = false;
     this.save({ ...ack(this.meta, entries), lastSyncedAt: new Date().toISOString() });
     return true;
   }
@@ -409,6 +460,12 @@ export class SyncEngine {
 
   /* ---------- Realtime ---------- */
 
+  /**
+   * Live "something changed" pings. The publication only carries INSERT and UPDATE (realtime
+   * doesn't check row-level security on DELETE events): removals are tombstones, which arrive
+   * as updates, and losing a household or membership shows up as a refused pull (42501), which
+   * runs verifyMembership.
+   */
   private openChannel(hid: string) {
     this.closeChannel();
     this.channelFor = hid;
@@ -416,7 +473,12 @@ export class SyncEngine {
       .channel(`household-records:${hid}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "household_records", filter: `household_id=eq.${hid}` },
+        { event: "INSERT", schema: "public", table: "household_records", filter: `household_id=eq.${hid}` },
+        () => this.schedulePull(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "household_records", filter: `household_id=eq.${hid}` },
         () => this.schedulePull(),
       );
     channel.subscribe((status) => {
@@ -482,6 +544,7 @@ export class SyncEngine {
     clearTimeout(this.flushTimer);
     this.notice = null;
     this.verified = householdId;
+    this.full = false;
     if (mode === "replace") this.applyToStore(replacedState());
     this.save({ ...emptyMeta(), householdId, householdName, userId: uid, pendingMerge: mode === "merge" });
     if (mode === "upload") {
@@ -531,10 +594,12 @@ export class SyncEngine {
    * Stop syncing on this device. Local data stays; queued changes are dropped. This device's
    * background reminders stop too: the server would otherwise keep pushing a household's food
    * to a device that no longer shows it (best effort; sending in a household turns them back on).
+   * Resolves once the push subscription is gone (or that failed); callers that reload or sign
+   * out straight after should wait for it, with a time limit (`withTimeout`).
    */
-  unbind() {
+  unbind(): Promise<void> {
     this.resetBinding();
-    void removePushSubscription().catch(() => undefined);
+    return removePushSubscription().catch(() => undefined);
   }
 
   private resetBinding() {
@@ -543,16 +608,67 @@ export class SyncEngine {
     this.closeChannel();
     this.verified = null;
     this.lastError = null;
+    this.full = false;
     this.save(emptyMeta());
   }
 
-  async signOut() {
+  /** The household this device's food came from, when it isn't syncing with it any more. */
+  get previousBinding(): PreviousBinding | null {
+    return this.meta.previous;
+  }
+
+  /**
+   * Sign out on this device.
+   * - keepData false: the household's food, list, recipes and history are removed from this
+   *   device (settings stay). True keeps them, and remembers where they came from so whoever
+   *   signs in next is steered to start fresh instead of merging them into another household.
+   * - everywhere: also end this account's sessions on every other device. If that can't reach
+   *   the server, this device is still signed out; resolves false then.
+   */
+  async signOut(opts: { keepData?: boolean; everywhere?: boolean } = {}): Promise<boolean> {
+    const { everywhere = false } = opts;
+    // Removing is only safe when the household has everything: not with changes still queued
+    // (they'd be lost), and not when this device isn't syncing with one (its food may differ).
+    const keepData = opts.keepData !== false || !this.meta.householdId || pendingCount(this.meta) > 0;
     // Remove this device's push subscription while still signed in (row-level security needs
     // the session), but never hold up signing out for long.
-    await Promise.race([removePushSubscription().catch(() => undefined), new Promise((r) => setTimeout(r, 4000))]);
+    await withTimeout(removePushSubscription().catch(() => undefined));
+    const from: PreviousBinding | null = this.meta.householdId
+      ? { userId: this.meta.userId, householdName: this.meta.householdName }
+      : this.meta.previous;
     this.resetBinding();
+    if (!keepData) {
+      this.applyToStore(replacedState());
+      try {
+        // Recipe ideas made from that food.
+        localStorage.removeItem("larder-ai-ideas");
+      } catch {
+        /* storage blocked */
+      }
+    } else if (from) {
+      this.save({ ...this.meta, previous: from });
+    }
+    if (everywhere) {
+      const { error } = await this.client.auth.signOut({ scope: "global" });
+      if (!error) return true;
+      await this.client.auth.signOut({ scope: "local" });
+      return false;
+    }
     // Local scope: other devices signed in to this account stay signed in.
     await this.client.auth.signOut({ scope: "local" });
+    return true;
+  }
+
+  /**
+   * After the account has been deleted on the server: stop everything and forget the session.
+   * The caller wipes local data and reloads.
+   */
+  async afterAccountDeleted() {
+    // The server rows went with the account; this unsubscribes the browser too.
+    await withTimeout(removePushSubscription().catch(() => undefined));
+    this.resetBinding();
+    await this.client.auth.signOut({ scope: "local" }).catch(() => undefined);
+    this.stop();
   }
 
   /**
@@ -588,7 +704,7 @@ export class SyncEngine {
     if (!this.session) state = "signed-out";
     else if (!this.syncing) state = "no-household";
     else if (!online || this.lastError?.offline) state = "offline";
-    else if (this.lastError) state = "error";
+    else if (this.lastError || (this.full && pending > 0)) state = "error";
     // Background pulls don't flip the status; only unsent changes or the first sync do.
     else if (pending > 0 || (this.active > 0 && !this.meta.lastSyncedAt)) state = "syncing";
     else state = "synced";
@@ -597,13 +713,14 @@ export class SyncEngine {
       ready: this.ready,
       pending,
       lastSyncedAt: this.meta.lastSyncedAt,
-      error: this.lastError?.message ?? null,
+      error: this.full && pending > 0 ? HOUSEHOLD_FULL_MESSAGE : (this.lastError?.message ?? null),
       userId: this.session?.user.id ?? null,
       email: this.session?.user.email ?? null,
       householdId: this.syncing ? this.meta.householdId : null,
       householdName: this.syncing ? this.meta.householdName : null,
       failed: this.syncing ? this.meta.failed : [],
       notice: this.notice,
+      previous: this.syncing ? null : this.meta.previous,
     });
   }
 }

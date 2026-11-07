@@ -3,6 +3,8 @@
 import { useId, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui";
+import { AiDeniedMessage } from "@/components/ai-denied";
+import { aiDenial, aiFetch, type AiDenial } from "@/lib/ai-client";
 import { lineToDraft, parseLocalList, type ApiError, type ParseResponse } from "@/lib/drafts";
 import { ErrorNotice } from "./notices";
 
@@ -19,10 +21,12 @@ export function PasteInput({ onResult }: { onResult: (r: ParseResponse) => void 
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [denied, setDenied] = useState<AiDenial | null>(null);
   const id = useId();
   const hintId = useId();
 
   async function submit() {
+    setDenied(null);
     if (!text.trim()) {
       setError("Paste or type at least one item.");
       return;
@@ -34,7 +38,8 @@ export function PasteInput({ onResult }: { onResult: (r: ParseResponse) => void 
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/parse-text", {
+      // Signed in, order emails and messy lists can be read with AI; signed out, line by line.
+      const res = await aiFetch("/api/parse-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -44,6 +49,7 @@ export function PasteInput({ onResult }: { onResult: (r: ParseResponse) => void 
         onResult(json);
         return;
       }
+      setDenied(aiDenial(res.status, json));
       setError((json && "message" in json && json.message) || "Couldn’t read that. Try one item per line.");
     } catch {
       // Offline or server unreachable: the parser runs in the browser too.
@@ -89,7 +95,7 @@ export function PasteInput({ onResult }: { onResult: (r: ParseResponse) => void 
         </p>
       </div>
 
-      {error && <ErrorNotice>{error}</ErrorNotice>}
+      {error && <ErrorNotice>{denied ? <AiDeniedMessage why={denied} message={error} /> : error}</ErrorNotice>}
 
       <Button type="submit" size="lg" block disabled={busy}>
         {busy ? (

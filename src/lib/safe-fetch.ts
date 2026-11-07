@@ -96,8 +96,12 @@ interface Page {
   url: string;
 }
 
-function once(url: URL, maxBytes: number, timeoutMs: number): Promise<{ status: number; location?: string; type: string; body?: string }> {
-  return new Promise((resolve, reject) => {
+type Hop = { status: number; location?: string; type: string; body?: string };
+
+/** One request. `timeoutMs` is the socket idle limit; `deadline` (epoch ms) ends it outright. */
+function once(url: URL, maxBytes: number, timeoutMs: number, deadline: number): Promise<Hop> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return new Promise<Hop>((resolve, reject) => {
     const host = url.hostname.replace(/^\[|\]$/g, "");
     if (isIP(host) && isBlockedAddress(host)) return reject(new SafeFetchError("blocked", "That address isn't allowed."));
     const lib = url.protocol === "https:" ? https : http;
@@ -149,11 +153,25 @@ function once(url: URL, maxBytes: number, timeoutMs: number): Promise<{ status: 
       if ((e as { code?: string }).code === "EBLOCKED") return reject(new SafeFetchError("blocked", "That address isn't allowed."));
       reject(new SafeFetchError("network", e.message));
     });
+    // A slow trickle never trips the idle timeout, so the whole fetch also has a hard end.
+    // Rejecting first settles the promise even if destroying leaves a stream without an event.
+    timer = setTimeout(() => {
+      reject(new SafeFetchError("timeout", "The page took too long to respond."));
+      req.destroy();
+    }, Math.max(0, deadline - Date.now()));
     req.end();
-  });
+  }).finally(() => clearTimeout(timer));
 }
 
-export async function safeFetchPage(raw: string, { maxBytes = 3 * 1024 * 1024, timeoutMs = 10_000, maxRedirects = 4 } = {}): Promise<Page> {
+/**
+ * `timeoutMs` limits each silent gap; `totalMs` is the most the whole fetch may take,
+ * redirects and download included.
+ */
+export async function safeFetchPage(
+  raw: string,
+  { maxBytes = 1024 * 1024, timeoutMs = 10_000, totalMs = 12_000, maxRedirects = 4 } = {},
+): Promise<Page> {
+  const deadline = Date.now() + totalMs;
   let current: URL;
   try {
     current = new URL(raw);
@@ -165,7 +183,8 @@ export async function safeFetchPage(raw: string, { maxBytes = 3 * 1024 * 1024, t
     if (current.username || current.password || (current.port && current.port !== "80" && current.port !== "443")) {
       throw new SafeFetchError("blocked", "That address isn't allowed.");
     }
-    const r = await once(current, maxBytes, timeoutMs);
+    if (Date.now() >= deadline) throw new SafeFetchError("timeout", "The page took too long to respond.");
+    const r = await once(current, maxBytes, timeoutMs, deadline);
     if (r.location !== undefined) {
       current = new URL(r.location, current);
       continue;

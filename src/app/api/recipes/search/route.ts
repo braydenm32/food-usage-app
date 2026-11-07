@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import type { Recipe } from "@/lib/types";
 import { ingredient, splitSteps } from "@/lib/recipes/map";
+import { clampInt, webUrl } from "@/lib/web-url";
+
+/** Longest ingredient name searched for; past this it is not one ingredient. */
+const MAX_TERM = 60;
 
 
 /**
@@ -40,10 +44,10 @@ function mapMeal(m: MealFull): Recipe {
     id: `db-${m.idMeal}`,
     title: m.strMeal,
     source: "database",
-    sourceUrl: m.strSource || `https://www.themealdb.com/meal/${m.idMeal}`,
+    sourceUrl: webUrl(m.strSource) ?? `https://www.themealdb.com/meal/${encodeURIComponent(m.idMeal)}`,
     // TheMealDB's terms ask apps to name it as the source of its data and images.
-    credit: { name: "TheMealDB", url: `https://www.themealdb.com/meal/${m.idMeal}` },
-    image: m.strMealThumb,
+    credit: { name: "TheMealDB", url: `https://www.themealdb.com/meal/${encodeURIComponent(m.idMeal)}` },
+    image: webUrl(m.strMealThumb),
     // TheMealDB doesn't say how many a meal serves.
     servings: 4,
     servingsEstimated: true,
@@ -57,8 +61,8 @@ function mapMeal(m: MealFull): Recipe {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
-  const ing = searchParams.get("ingredient")?.trim();
-  const limit = Math.min(Number(searchParams.get("limit")) || 6, 10);
+  const ing = searchParams.get("ingredient")?.trim().slice(0, MAX_TERM).trim();
+  const limit = clampInt(searchParams.get("limit"), 1, 10, 6);
 
   try {
     if (id !== null) {
@@ -85,7 +89,7 @@ export async function GET(req: Request) {
     }
     const metas = (list?.meals ?? []).slice(0, limit);
     const full = await Promise.all(
-      metas.map((m) => getJson<{ meals: MealFull[] | null }>(`${BASE}/lookup.php?i=${m.idMeal}`).then((d) => d?.meals?.[0])),
+      metas.map((m) => getJson<{ meals: MealFull[] | null }>(`${BASE}/lookup.php?i=${encodeURIComponent(m.idMeal)}`).then((d) => d?.meals?.[0])),
     );
     const recipes = full.filter((m): m is MealFull => !!m).map(mapMeal).filter((r) => r.steps.length > 0);
     return NextResponse.json({ recipes });

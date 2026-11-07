@@ -1,8 +1,17 @@
 // Larder service worker: offline shell + notifications (background reminders arrive here as pushes).
 // Bump the version when the caching rules or shell change; old caches are deleted on activate.
-const VERSION = 6;
+const VERSION = 8;
 const CACHE = `larder-v${VERSION}`;
+// The account page's HTML is a client-rendered shell with nothing personal in it, so it can open
+// offline (and show the sync status) like the rest.
 const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/nutrition", "/kitchen", "/welcome", "/account"];
+/** Pages never stored: invite links carry a token. */
+const PRIVATE = /^\/join\//;
+/**
+ * Where a page is stored. Sign-in returns land on /account with a one-time code (or an error) in
+ * the address, so that page is always stored under its bare path, never with the query.
+ */
+const cacheKey = (request, url) => (url.pathname === "/account" ? "/account" : request);
 
 /** Only cache complete, same-origin successes (no errors, redirects or opaque responses). */
 const cacheable = (res) => res && res.ok && res.type === "basic";
@@ -74,13 +83,14 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+  if (PRIVATE.test(url.pathname)) return;
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
         .then((res) => {
           if (cacheable(res)) {
             const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(request, copy));
+            caches.open(CACHE).then((c) => c.put(cacheKey(request, url), copy));
           }
           return res;
         })
