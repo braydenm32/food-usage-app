@@ -168,10 +168,12 @@ export function enqueue(meta: SyncMeta, changes: Change[]): SyncMeta {
   return { ...meta, outbox, rev };
 }
 
-/** Up to `size` entries to send, oldest first. */
-export function nextBatch(meta: SyncMeta, size = 200): OutboxEntry[] {
+/** Up to `size` entries to send: removals first, then oldest first. `deletesOnly` sends only removals. */
+export function nextBatch(meta: SyncMeta, size = 200, deletesOnly = false): OutboxEntry[] {
+  // Removals first: they free room, so a household at its storage limit can still shrink.
   return Object.values(meta.outbox)
-    .sort((a, b) => a.rev - b.rev)
+    .filter((e) => !deletesOnly || e.op === "delete")
+    .sort((a, b) => Number(b.op === "delete") - Number(a.op === "delete") || a.rev - b.rev)
     .slice(0, size);
 }
 
@@ -249,13 +251,16 @@ export interface PreparedBatch {
 export function prepareBatch(entries: OutboxEntry[], state: SyncedState, householdId: string, maxBytes = MAX_RECORD_BYTES): PreparedBatch {
   const out: PreparedBatch = { entries: [], rows: [], tooLarge: [] };
   const rows = buildRows(entries, state, householdId);
-  rows.forEach((row, i) => {
+  // Tombstones first (an upsert whose record has gone locally is one too).
+  const order = rows.map((_, i) => i).sort((a, b) => Number(rows[b].deleted) - Number(rows[a].deleted) || a - b);
+  for (const i of order) {
+    const row = rows[i];
     if (recordBytes(row) > maxBytes) out.tooLarge.push(entries[i]);
     else {
       out.entries.push(entries[i]);
       out.rows.push(row);
     }
-  });
+  }
   return out;
 }
 

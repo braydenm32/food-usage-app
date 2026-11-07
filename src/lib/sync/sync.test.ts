@@ -110,6 +110,16 @@ describe("outbox", () => {
     expect(batch[199].id).toBe("e199");
   });
 
+  it("batches removals before other changes, and can send only removals", () => {
+    const m = enqueue(emptyMeta(), [
+      { c: "items", id: "a", op: "upsert" },
+      { c: "items", id: "gone", op: "delete" },
+      { c: "items", id: "b", op: "upsert" },
+    ]);
+    expect(nextBatch(m).map((e) => e.id)).toEqual(["gone", "a", "b"]);
+    expect(nextBatch(m, 200, true).map((e) => e.id)).toEqual(["gone"]);
+  });
+
   it("builds rows from current values; missing records go up as deletes", () => {
     const a = item("a", { quantity: 5 });
     const m = enqueue(emptyMeta(), [

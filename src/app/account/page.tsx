@@ -796,8 +796,12 @@ function LeaveCard({ householdId, householdName, lastOne }: { householdId: strin
 
 function AccountCard() {
   const { email, householdId, householdName, previous } = useSyncStatus();
-  /** The food here belongs to a household: ask whether to keep it on this device. */
-  const fromHousehold = Boolean(householdId || previous);
+  /**
+   * This device syncs with a household: ask whether to keep its food here. When it only
+   * came from one earlier (signed out and kept), it's not in step with the household any
+   * more, so it isn't offered for removal: signing out keeps it.
+   */
+  const fromHousehold = Boolean(householdId);
   const fromName = householdName ?? previous?.householdName ?? null;
   /** Non-null while the sign-out choice is showing. */
   const [step, setStep] = useState<{ everywhere: boolean } | null>(null);
@@ -814,11 +818,15 @@ function AccountCard() {
       if (!force) {
         const left = await engine.flushPending();
         if (left > 0) {
+          // Removing would lose them: only keeping is offered from here.
           setUnsynced(left);
+          setKeep(true);
+          setStep({ everywhere });
           return;
         }
       }
-      const keepData = fromHousehold ? keep : true;
+      // Never remove changes that haven't reached the household (the engine checks too).
+      const keepData = fromHousehold && unsynced === 0 ? keep : true;
       const reached = await engine.signOut({ keepData, everywhere });
       const where = !everywhere
         ? "Signed out."
@@ -843,7 +851,7 @@ function AccountCard() {
     setStep({ everywhere });
   };
 
-  const choices = [
+  const allChoices = [
     {
       keep: false,
       title: "Remove it from this device",
@@ -855,6 +863,8 @@ function AccountCard() {
       body: "Anyone who uses this device can still see it, but it stops syncing.",
     },
   ];
+  /** With changes still unsent, removing would lose them, so only keeping is offered. */
+  const choices = unsynced > 0 ? allChoices.filter((c) => c.keep) : allChoices;
 
   return (
     <>
@@ -874,7 +884,8 @@ function AccountCard() {
         {step && (
           <div className="mt-4 flex flex-col gap-3" role="alertdialog" aria-labelledby="signout-heading">
             <p id="signout-heading" className="text-[15px] font-medium text-ink">
-              {step.everywhere ? "Sign out on all your devices?" : "Sign out?"} What should happen to the food on this device?
+              {step.everywhere ? "Sign out on all your devices?" : "Sign out?"}{" "}
+              {unsynced > 0 ? "The food on this device stays here." : "What should happen to the food on this device?"}
             </p>
             <fieldset className="flex flex-col gap-2">
               <legend className="sr-only">The household&apos;s food on this device</legend>

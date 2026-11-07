@@ -90,41 +90,103 @@ for each statement execute function private.check_household_record_cap();
 -- A byte budget per household (about 20 MB of record data, as JSON text), kept as a running total.
 alter table public.households add column if not exists bytes_used bigint not null default 0;
 
-create or replace function private.household_records_usage()
+-- Kept by statement-level triggers that sum the net change per household from the transition
+-- tables, so a batch that adds some records and removes others is judged on what it leaves
+-- behind, not on which row came first. Postgres doesn't allow transition tables on a trigger
+-- with more than one event, hence one trigger for inserts and one for updates. An upsert fires
+-- both: AFTER UPDATE statement triggers run before AFTER INSERT ones, and inserts only ever add
+-- bytes, so the insert trigger sees the statement's whole net change. Transition tables hold
+-- rows as stored (household_records_touch has already cleared a tombstone's data), and only the
+-- insert or the update that really happened appears in each.
+
+-- Add a household's net change in bytes; refuse growth that would go past the budget. Shrinking
+-- (or no change) is always allowed, even for a household already over it.
+create or replace function private.add_household_bytes(hid uuid, delta bigint)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  budget constant bigint := 20 * 1024 * 1024;
+begin
+  if delta > 0 then
+    update public.households set bytes_used = bytes_used + delta
+    where id = hid and bytes_used + delta <= budget;
+    if not found and exists (select 1 from public.households where id = hid) then
+      raise exception 'This household has reached its storage limit'
+        using errcode = '54000', hint = 'A household can keep about 20 MB. Delete some old recipes or notes to make room.';
+    end if;
+  elsif delta < 0 then
+    update public.households set bytes_used = greatest(bytes_used + delta, 0) where id = hid;
+  end if;
+end;
+$$;
+revoke execute on function private.add_household_bytes(uuid, bigint) from public, anon, authenticated;
+
+create or replace function private.household_records_usage_insert()
 returns trigger
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  delta bigint := coalesce(octet_length(new.data::text), 0);
-  budget constant bigint := 20 * 1024 * 1024;
+  d record;
 begin
-  if tg_op = 'UPDATE' then
-    delta := delta - coalesce(octet_length(old.data::text), 0);
-  end if;
-  if delta > 0 then
-    update public.households set bytes_used = bytes_used + delta
-    where id = new.household_id and bytes_used + delta <= budget;
-    if not found then
-      raise exception 'This household has reached its storage limit'
-        using errcode = '54000', hint = 'A household can keep about 20 MB. Delete some old recipes or notes to make room.';
-    end if;
-  elsif delta < 0 then
-    update public.households set bytes_used = greatest(bytes_used + delta, 0) where id = new.household_id;
-  end if;
+  -- Household order, so two statements touching the same households lock them the same way.
+  for d in
+    select n.household_id, sum(coalesce(octet_length(n.data::text), 0))::bigint as delta
+    from inserted n
+    group by n.household_id
+    order by n.household_id
+  loop
+    perform private.add_household_bytes(d.household_id, d.delta);
+  end loop;
   return null;
 end;
 $$;
-revoke execute on function private.household_records_usage() from public, anon, authenticated;
+revoke execute on function private.household_records_usage_insert() from public, anon, authenticated;
 
+create or replace function private.household_records_usage_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  d record;
+begin
+  -- Keys can't change (household_records_keys_fixed), so old and new rows pair up by key.
+  for d in
+    select n.household_id,
+      sum(coalesce(octet_length(n.data::text), 0) - coalesce(octet_length(o.data::text), 0))::bigint as delta
+    from updated_new n
+    join updated_old o on o.household_id = n.household_id and o.collection = n.collection and o.id = n.id
+    group by n.household_id
+    order by n.household_id
+  loop
+    perform private.add_household_bytes(d.household_id, d.delta);
+  end loop;
+  return null;
+end;
+$$;
+revoke execute on function private.household_records_usage_update() from public, anon, authenticated;
+
+-- The per-row version (from an earlier draft of this file) judged each row on its own.
 drop trigger if exists household_records_usage on public.household_records;
--- An AFTER trigger: it sees the row as stored (household_records_touch has already cleared a
--- tombstone's data), and with an upsert only the insert or the update that really happened
--- fires it (a BEFORE INSERT trigger also fires for a proposed row that becomes an update).
-create trigger household_records_usage
-after insert or update on public.household_records
-for each row execute function private.household_records_usage();
+drop function if exists private.household_records_usage();
+
+drop trigger if exists household_records_usage_insert on public.household_records;
+create trigger household_records_usage_insert
+after insert on public.household_records
+referencing new table as inserted
+for each statement execute function private.household_records_usage_insert();
+
+drop trigger if exists household_records_usage_update on public.household_records;
+create trigger household_records_usage_update
+after update on public.household_records
+referencing old table as updated_old new table as updated_new
+for each statement execute function private.household_records_usage_update();
 
 update public.households h
 set bytes_used = coalesce((
