@@ -213,9 +213,116 @@ function findRecipeNode(data: Json, depth = 0): Record<string, Json> | null {
   return null;
 }
 
+/* ---------- linear HTML scanning ----------
+ * Pages come from anywhere, so nothing here may backtrack: an unclosed "<nav>" repeated 100k
+ * times must not take seconds. Every helper below moves forward through the string with
+ * indexOf (or a literal search), so the work grows with the page size, not its square.
+ */
+
+/** Pages are cut to this many characters before parsing. Recipe data sits near the top. */
+export const MAX_HTML_CHARS = 512 * 1024;
+
+/** Replace every `<...>` tag with a space. An unclosed `<` (no `>` after it) is left as text. */
+export function stripTags(s: string): string {
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const lt = s.indexOf("<", i);
+    if (lt === -1) break;
+    const gt = s.indexOf(">", lt + 1);
+    // No ">" anywhere after this point, so there are no more tags.
+    if (gt === -1) break;
+    // "<>" isn't a tag: keep it as text.
+    out += gt === lt + 1 ? s.slice(i, gt + 1) : `${s.slice(i, lt)} `;
+    i = gt + 1;
+  }
+  return out + s.slice(i);
+}
+
+/** Lower-case tag name starting at `from` (just after "<" or "</"): up to 16 ASCII letters or digits. */
+function tagNameAt(s: string, from: number): string {
+  let end = from;
+  while (end < s.length && end - from < 16) {
+    const c = s.charCodeAt(end);
+    const alnum = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    if (!alnum) break;
+    end++;
+  }
+  return s.slice(from, end).toLowerCase();
+}
+
+/** Index of the next `</name` (any case) at or after `from`, or -1. A literal search, so linear. */
+function closingTagIndex(s: string, name: string, from: number): number {
+  const re = new RegExp(`</${name}`, "gi");
+  re.lastIndex = from;
+  return re.exec(s)?.index ?? -1;
+}
+
+/** The JSON text inside each `<script type="application/ld+json">` block, in page order. */
+export function ldJsonBlocks(html: string): string[] {
+  const out: string[] = [];
+  const open = /<script/gi;
+  for (;;) {
+    const m = open.exec(html);
+    if (!m) break;
+    const gt = html.indexOf(">", m.index + 7);
+    if (gt === -1) break;
+    open.lastIndex = gt + 1;
+    if (!/type\s*=\s*["']?application\/ld\+json/i.test(html.slice(m.index + 7, gt))) continue;
+    const close = closingTagIndex(html, "script", gt + 1);
+    if (close === -1) break;
+    out.push(html.slice(gt + 1, close));
+    open.lastIndex = close + 8;
+  }
+  return out;
+}
+
+const SKIP_BLOCKS = new Set(["script", "style", "noscript", "svg", "nav", "header", "footer", "form", "iframe"]);
+/** Marks a line-level tag; not whitespace, so text newlines inside a block still fold to spaces. */
+const LINE_BREAK = "\u0000";
+const LINE_TAGS = new Set(["br", "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "div", "tr"]);
+
+/**
+ * Page HTML to rough text lines: script, style and navigation blocks dropped, line-level tags
+ * (p, li, br, div...) become newlines and other tags spaces. Entities are left for decodeEntities.
+ */
+function htmlToLines(html: string): string {
+  let out = "";
+  let i = 0;
+  // Per block name: where its next closing tag is, or -1 when none is left. Searches only move
+  // forward, so an unclosed tag repeated many times still costs one pass.
+  const nextClose = new Map<string, number>();
+  for (;;) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) break;
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) break;
+    const closing = html.charCodeAt(lt + 1) === 47; // "/"
+    const name = tagNameAt(html, lt + (closing ? 2 : 1));
+    out += html.slice(i, lt);
+    i = gt + 1;
+    if (!closing && SKIP_BLOCKS.has(name)) {
+      let close = nextClose.get(name);
+      if (close === undefined || (close !== -1 && close < i)) {
+        close = closingTagIndex(html, name, i);
+        nextClose.set(name, close);
+      }
+      if (close !== -1) {
+        // Skip the whole block, through the end of its closing tag.
+        const end = html.indexOf(">", close);
+        i = end === -1 ? html.length : end + 1;
+        out += " ";
+        continue;
+      }
+      // Never closed: keep what follows as ordinary text.
+    }
+    out += !closing && LINE_TAGS.has(name) ? LINE_BREAK : " ";
+  }
+  return out + html.slice(i);
+}
+
 const decodeEntities = (s: string) =>
-  s
-    .replace(/<[^>]+>/g, " ")
+  stripTags(s)
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
@@ -297,11 +404,10 @@ export function tablespoonFor(url: string | undefined): 15 | 20 {
 
 /** Find and convert the schema.org Recipe in a page's HTML, or null when there isn't one. */
 export function recipeFromHtml(html: string, url?: string): Recipe | null {
-  const scripts = html.matchAll(/<script[^>]*type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi);
-  for (const s of scripts) {
+  for (const block of ldJsonBlocks(html.slice(0, MAX_HTML_CHARS))) {
     let data: Json;
     try {
-      data = JSON.parse(s[1].trim());
+      data = JSON.parse(block.trim());
     } catch {
       continue;
     }
@@ -363,9 +469,8 @@ export function finishImport(d: ImportDraft): Recipe {
 
 /** Visible page text for the AI fallback, with scripts, styles and navigation removed. */
 export function pageText(html: string, max = 30_000): string {
-  return html
-    .replace(/<(script|style|noscript|svg|nav|header|footer|form|iframe)[\s\S]*?<\/\1>/gi, " ")
-    .split(/<(?:br|p|li|h\d|div|tr)[^>]*>/i)
+  return htmlToLines(html.slice(0, MAX_HTML_CHARS))
+    .split(LINE_BREAK)
     .map(decodeEntities)
     .filter(Boolean)
     .join("\n")
