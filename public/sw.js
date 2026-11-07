@@ -1,8 +1,10 @@
 // Larder service worker: offline shell + notifications (background reminders arrive here as pushes).
 // Bump the version when the caching rules or shell change; old caches are deleted on activate.
-const VERSION = 6;
+const VERSION = 7;
 const CACHE = `larder-v${VERSION}`;
-const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/nutrition", "/kitchen", "/welcome", "/account"];
+const SHELL = ["/", "/pantry", "/add", "/recipes", "/list", "/settings", "/plan", "/insights", "/nutrition", "/kitchen", "/welcome"];
+/** Pages never stored: invite links carry a token, and the account page shows who is signed in. */
+const PRIVATE = /^\/(?:join\/|account(?:\/|$))/;
 
 /** Only cache complete, same-origin successes (no errors, redirects or opaque responses). */
 const cacheable = (res) => res && res.ok && res.type === "basic";
@@ -74,6 +76,7 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+  if (PRIVATE.test(url.pathname)) return;
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)

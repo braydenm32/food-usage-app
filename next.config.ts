@@ -15,7 +15,9 @@ function supabaseOrigins(): { https: string; wss: string } | null {
 }
 const supabase = supabaseOrigins();
 
-// No nonces: pages are prerendered, so inline scripts/styles that Next needs are allowed.
+// No nonces: pages are prerendered (cacheComponents), and a nonce needs a fresh value per request,
+// which would make every page dynamic. So the inline scripts and styles Next writes into the
+// prerendered HTML are allowed with 'unsafe-inline'. Everything else is locked to this origin.
 const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
@@ -38,6 +40,12 @@ const securityHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=(), payment=()" },
   { key: "X-Frame-Options", value: "DENY" },
+  { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+  // Other sites' windows can't keep a handle on ours (Supabase sign-in is a redirect, not a popup).
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  // Our own responses (API JSON, icons, the manifest) can't be loaded by other sites. Images we
+  // show from TheMealDB and Open Food Facts are their responses, so this doesn't affect them.
+  { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
 ];
 
 const nextConfig: NextConfig = {

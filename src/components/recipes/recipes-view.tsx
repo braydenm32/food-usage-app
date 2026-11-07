@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen, CalendarDays, CircleAlert, Download, Globe, Plus, RotateCcw, Sparkles, WifiOff, X } from "lucide-react";
 import { Button, Chip, EmptyState, PageHeader, Segmented, SectionTitle, buttonClass } from "@/components/ui";
 import { toast } from "@/components/toast";
+import { AiDeniedMessage } from "@/components/ai-denied";
+import { aiDenial, aiFetch, type AiDenial } from "@/lib/ai-client";
 import { RecipeCard, RecipeCardSkeleton } from "@/components/recipes/recipe-card";
 import { AiIdeasNotice } from "@/components/privacy-notices";
 import { ImportSheet } from "@/components/recipes/import-sheet";
@@ -130,7 +132,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
     return () => ctl.abort();
   }, []);
 
-  const [ai, setAi] = useState<{ state: "idle" | "loading" | "done" | "unconfigured" | "error"; recipes: Recipe[]; message?: string }>({
+  const [ai, setAi] = useState<{ state: "idle" | "loading" | "done" | "unconfigured" | "error"; recipes: Recipe[]; message?: string; denied?: AiDenial }>({
     state: "idle",
     recipes: [],
   });
@@ -157,7 +159,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
   async function getIdeas() {
     setAi((a) => ({ ...a, state: "loading", message: undefined }));
     try {
-      const res = await fetch("/api/recipes", {
+      const res = await aiFetch("/api/recipes", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: aiBody,
@@ -167,6 +169,8 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
         setAiConfigured(false);
         return setAi({ state: "unconfigured", recipes: [] });
       }
+      const denied = aiDenial(res.status, data);
+      if (denied) return setAi({ state: "error", recipes: [], denied });
       if (!res.ok) return setAi({ state: "error", recipes: [], message: data.message });
       cacheRecipes(data.recipes);
       saveAiIdeas(aiBody, data.recipes);
@@ -418,7 +422,18 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
                 <AiIdeasNotice className="mt-3" />
                 {ai.state === "error" && (
                   <p role="alert" className="mt-3 flex items-start gap-2 rounded-2xl bg-spoiled-soft p-3 text-sm text-ink">
-                    <WifiOff size={16} className="mt-0.5 shrink-0" aria-hidden /> {ai.message ?? "Couldn't get ideas just now. Try again in a moment."}
+                    {ai.denied ? (
+                      <>
+                        <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
+                        <span>
+                          <AiDeniedMessage why={ai.denied} />
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff size={16} className="mt-0.5 shrink-0" aria-hidden /> {ai.message ?? "Couldn't get ideas just now. Try again in a moment."}
+                      </>
+                    )}
                   </p>
                 )}
               </div>

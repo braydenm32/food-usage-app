@@ -16,7 +16,7 @@ describe("push sender guards", () => {
   it("never posts to an endpoint that isn't a browser push service", async () => {
     const cfg = { supabaseUrl: "", serviceKey: "", vapidPublic: "", vapidPrivate: "", vapidSubject: "" };
     const row = { endpoint: "https://169.254.169.254/latest/meta-data", p256dh: "x", auth: "y" };
-    expect(await sendPush(cfg, row, { title: "t", body: "b", url: "/", tag: "x" })).toBe("gone");
+    expect(await sendPush(cfg, row, { title: "t", body: "b", url: "/", tag: "x" })).toEqual({ result: "gone" });
   });
 });
 

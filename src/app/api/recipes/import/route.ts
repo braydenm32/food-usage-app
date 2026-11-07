@@ -4,11 +4,16 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import Anthropic from "@anthropic-ai/sdk";
 import { AI_MODEL, getAnthropic } from "@/lib/ai";
 import { finishImport, pageText, parseIngredientLine, recipeFromHtml, toCelsius } from "@/lib/recipes/import";
+import { BodyTooLargeError, FORM_OVERHEAD_BYTES, MAX_IMAGE_BYTES, readCappedForm, readCappedJson, sniffImageType } from "@/lib/http-body";
 import { SafeFetchError, safeFetchPage } from "@/lib/safe-fetch";
+import { aiAuthConfigured, authenticateAi, bearerToken, consumeAiCall } from "@/lib/server-auth";
 import type { Recipe } from "@/lib/types";
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+/** Fetching the page (up to 12 s) plus the AI fallback; leave room for both. */
+export const maxDuration = 60;
+
+const MAX_JSON_BYTES = 8 * 1024;
+const TOO_BIG = "That photo is too big. Try one under 4 MB.";
 
 function fail(status: number, error: string, message: string) {
   return NextResponse.json({ error, message }, { status });
@@ -71,12 +76,14 @@ function aiError(err: unknown) {
 /** GET: whether the AI fallback (photos, pages without recipe data) is available. */
 export async function GET() {
   await connection();
-  return NextResponse.json({ ai: !!getAnthropic() });
+  return NextResponse.json({ ai: !!getAnthropic() && aiAuthConfigured(), signIn: "required" });
 }
 
 /**
  * POST JSON `{ url }` to import from a web page, or multipart form data with `image` to read a photo.
  * Returns `{ recipe, method: "page-data" | "ai" }` for the user to review before saving.
+ * Pages with recipe data import for anyone. Photos, and pages that need the AI to read them,
+ * need `Authorization: Bearer <Supabase access token>` and count against the daily AI allowance.
  */
 export async function POST(req: Request) {
   const type = req.headers.get("content-type") ?? "";
@@ -84,21 +91,28 @@ export async function POST(req: Request) {
   if (type.startsWith("multipart/form-data")) {
     const client = getAnthropic();
     if (!client) return fail(503, "ai_not_configured", "Reading recipe photos needs the AI helper, which isn't set up yet. Paste a link instead.");
-    if (Number(req.headers.get("content-length") ?? 0) > MAX_IMAGE_BYTES + 64 * 1024) return fail(413, "image_too_large", "That photo is too big. Try one under 8 MB.");
+    const user = await authenticateAi(req);
+    if (!user.ok) return user.response;
     let form: FormData;
     try {
-      form = await req.formData();
-    } catch {
+      form = await readCappedForm(req, MAX_IMAGE_BYTES + FORM_OVERHEAD_BYTES);
+    } catch (e) {
+      if (e instanceof BodyTooLargeError) return fail(413, "image_too_large", TOO_BIG);
       return fail(400, "bad_request", "Send the photo as form data with an 'image' field.");
     }
     const file = form.get("image");
     if (!(file instanceof File) || file.size === 0) return fail(400, "no_image", "No photo was received. Choose a photo and try again.");
-    if (file.size > MAX_IMAGE_BYTES) return fail(413, "image_too_large", "That photo is too big. Try one under 8 MB.");
-    if (!IMAGE_TYPES.has(file.type)) return fail(415, "unsupported_image", "That file type isn't supported. Use a JPEG, PNG or WebP photo.");
-    const data = Buffer.from(await file.arrayBuffer()).toString("base64");
+    if (file.size > MAX_IMAGE_BYTES) return fail(413, "image_too_large", TOO_BIG);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    // Trust the file's own bytes, not the type it claimed.
+    const mediaType = sniffImageType(bytes);
+    if (!mediaType) return fail(415, "unsupported_image", "That file type isn't supported. Use a JPEG, PNG or WebP photo.");
+    const denied = await consumeAiCall(user);
+    if (denied) return denied;
+    const data = Buffer.from(bytes).toString("base64");
     try {
       const r = await aiExtract(client, [
-        { type: "image", source: { type: "base64", media_type: file.type as "image/jpeg", data } },
+        { type: "image", source: { type: "base64", media_type: mediaType, data } },
         { type: "text", text: "Copy the recipe in this photo." },
       ]);
       if (!r) return fail(422, "no_recipe", "Couldn't find a recipe in that photo. Try a closer, well-lit shot of the whole page.");
@@ -111,7 +125,7 @@ export async function POST(req: Request) {
 
   let url: string;
   try {
-    const body = z.object({ url: z.string().trim().min(4).max(2000) }).parse(await req.json());
+    const body = z.object({ url: z.string().trim().min(4).max(2000) }).parse(await readCappedJson(req, MAX_JSON_BYTES));
     url = /^https?:\/\//i.test(body.url) ? body.url : `https://${body.url}`;
     new URL(url);
   } catch {
@@ -145,6 +159,13 @@ export async function POST(req: Request) {
   if (recipe) return NextResponse.json({ recipe, method: "page-data" });
 
   if (!client) return fail(422, "no_recipe_data", "That page doesn't share its recipe in a standard way, so Larder can't read it. You can write it in yourself.");
+  if (!bearerToken(req)) {
+    return fail(401, "sign_in_required", "That page doesn't share its recipe in a standard way. Sign in and Larder can read it with AI, or write it in yourself.");
+  }
+  const user = await authenticateAi(req);
+  if (!user.ok) return user.response;
+  const denied = await consumeAiCall(user);
+  if (denied) return denied;
   try {
     const r = await aiExtract(client, `Page: ${page.url}\n\n${pageText(page.html)}`);
     if (!r) return fail(422, "no_recipe", "Couldn't find a recipe on that page.");

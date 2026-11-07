@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Camera, ImageUp, Loader2 } from "lucide-react";
-import { Button, cx } from "@/components/ui";
+import { Button, buttonClass, cx } from "@/components/ui";
+import { AI_QUOTA_COPY, AI_SIGN_IN_COPY, aiDenial, aiFetch, hasAiSession } from "@/lib/ai-client";
 import type { ApiError, ParseResponse } from "@/lib/drafts";
 import { downscaleImage } from "./image";
 import { AiUnavailable, ErrorNotice } from "./notices";
@@ -25,7 +26,11 @@ type State =
   | { kind: "idle" }
   | { kind: "reading"; preview: string }
   | { kind: "error"; message: string; preview?: string }
-  | { kind: "no-ai" };
+  | { kind: "no-ai" }
+  | { kind: "sign-in" };
+
+/** Same cap as the server (and under the host's 4.5 MB request limit). */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const COPY = {
   receipt: {
@@ -61,8 +66,11 @@ export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list" | "s
     let cancelled = false;
     fetch("/api/scan")
       .then((r) => (r.ok ? r.json() : null))
-      .then((j: { configured?: boolean } | null) => {
-        if (!cancelled && j && j.configured === false) setState({ kind: "no-ai" });
+      .then(async (j: { configured?: boolean } | null) => {
+        if (cancelled || !j) return;
+        if (j.configured === false) return setState({ kind: "no-ai" });
+        // Photo reading is for signed-in people: say so before the photo, not after.
+        if (j.configured === true && !(await hasAiSession()) && !cancelled) setState({ kind: "sign-in" });
       })
       .catch(() => {});
     return () => {
@@ -76,16 +84,17 @@ export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list" | "s
       setState({ kind: "error", message: "That isn’t a photo. Choose a JPEG, PNG or HEIC image." });
       return;
     }
+    // Always send the shrunk copy: re-encoding also drops the photo's location and camera details.
     let upload: Blob;
     try {
       upload = await downscaleImage(file);
     } catch {
-      if (["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 8 * 1024 * 1024) {
-        upload = file;
-      } else {
-        setState({ kind: "error", message: "Couldn’t open that photo. Try a JPEG or PNG, or take a new photo." });
-        return;
-      }
+      setState({ kind: "error", message: "Couldn’t read that photo. Try a JPEG or PNG, or take a new photo." });
+      return;
+    }
+    if (upload.size > MAX_UPLOAD_BYTES) {
+      setState({ kind: "error", message: "That photo is too big. Try a smaller photo (under 4 MB)." });
+      return;
     }
     const preview = URL.createObjectURL(upload);
     setState({ kind: "reading", preview });
@@ -96,12 +105,21 @@ export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list" | "s
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      const res = await fetch("/api/scan", { method: "POST", body: form, signal: ac.signal });
+      const res = await aiFetch("/api/scan", { method: "POST", body: form, signal: ac.signal });
       if (res.status === 503) {
         setState({ kind: "no-ai" });
         return;
       }
       const json = (await res.json().catch(() => null)) as ParseResponse | ApiError | null;
+      const denied = aiDenial(res.status, json);
+      if (denied === "sign-in") {
+        setState({ kind: "sign-in" });
+        return;
+      }
+      if (denied === "quota") {
+        setState({ kind: "error", preview, message: AI_QUOTA_COPY });
+        return;
+      }
       if (!res.ok || !json || !("drafts" in json)) {
         setState({
           kind: "error",
@@ -127,6 +145,23 @@ export function PhotoCapture({ kind, onResult }: { kind: "receipt" | "list" | "s
   }
 
   if (state.kind === "no-ai") return <AiUnavailable what={kind} />;
+
+  if (state.kind === "sign-in") {
+    return (
+      <div role="status" className="rounded-[var(--radius-card)] border border-line bg-surface p-5">
+        <p className="font-semibold text-ink">Sign in to read photos</p>
+        <p className="mt-1 text-[15px] text-ink-2">{AI_SIGN_IN_COPY} You can still paste or type your list without signing in.</p>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <Link href="/account" className={buttonClass("primary", "md")}>
+            Sign in
+          </Link>
+          <Link href="/add?method=paste" className={buttonClass("secondary", "md")}>
+            Paste or type the list instead
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (state.kind === "reading") {
     return (
