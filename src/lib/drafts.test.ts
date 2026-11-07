@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FoodType, ItemEvent, PantryItem } from "./types";
+import { scrubPersonalInfo } from "./drafts";
 
 // A small fixed food table so these tests don't move when the real data changes.
 vi.mock("./shelf-life/foods-data", () => {
@@ -463,5 +464,37 @@ describe("findMergeTarget with a freshness check", () => {
     // Same printed date and still fresh: same batch, fine to top up.
     expect(findMergeTarget({ ...draft, printedDate: "2026-11-20" }, [item({ addedAt: daysAgo(3), printedDate: "2026-11-20" })], ctx)?.id).toBe("a");
     expect(findMergeTarget({ ...draft, printedDate: "2026-11-03" }, [item({ printedDate: "2026-11-03" })], ctx)).toBeUndefined();
+  });
+});
+
+describe("scrubPersonalInfo", () => {
+  const email = [
+    "Hi Sam Nguyen,",
+    "Thanks for your order! Order number: AB12345678",
+    "Delivery address: 12 Smith St, Newtown NSW 2042",
+    "Unit 4/88 Albert Road",
+    "Brisbane QLD 4000",
+    "Call us on 1300 123 456 or text 0412 345 678. Your mobile: +61 412 345 678",
+    "Contact: sam.nguyen@example.com",
+    "Everyday Rewards card 1234 5678 9012 3456",
+    "Flybuys: 6008123456789",
+    "2 x Full cream milk 2L $5.60",
+    "500g beef mince $9.00",
+    "1 Place mats set $12.00",
+  ].join("\n");
+  const out = scrubPersonalInfo(email);
+
+  it("removes names, addresses, contact details and account numbers", () => {
+    expect(out).not.toMatch(/Sam|Nguyen|Smith|Albert|Newtown|Brisbane|4000/);
+    expect(out).not.toMatch(/@|AB12345678|0412|412 345|1300|1234 5678|6008123456789/);
+  });
+  it("keeps the items and prices", () => {
+    expect(out).toContain("2 x Full cream milk 2L $5.60");
+    expect(out).toContain("500g beef mince $9.00");
+    expect(out).toContain("1 Place mats set $12.00");
+  });
+  it("keeps a bare greeting and leaves a plain list alone", () => {
+    expect(out).toContain("Hi");
+    expect(scrubPersonalInfo("milk 2L\n2x tins tomatoes\nbananas")).toBe("milk 2L\n2x tins tomatoes\nbananas");
   });
 });

@@ -369,3 +369,14 @@ describe("review fixes", () => {
     expect(s().mealPlan[0].recipe?.title).toBe("Fritters");
   });
 });
+
+describe("privacy fields", () => {
+  it("keeps a consent timestamp and drops junk values", () => {
+    const good = normalisePersisted({ profile: { sensitiveConsentAt: "2026-11-07T00:00:00.000Z" }, settings: { aiIncludeProfile: false } });
+    expect(good.profile.sensitiveConsentAt).toBe("2026-11-07T00:00:00.000Z");
+    expect(good.settings.aiIncludeProfile).toBe(false);
+    const bad = normalisePersisted({ profile: { sensitiveConsentAt: 5 }, settings: { aiIncludeProfile: "no" } });
+    expect(bad.profile.sensitiveConsentAt).toBeUndefined();
+    expect(bad.settings.aiIncludeProfile).toBeUndefined();
+  });
+});

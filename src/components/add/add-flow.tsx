@@ -29,6 +29,7 @@ import { PhotoCapture } from "./photo-capture";
 import { PasteInput } from "./paste-input";
 import { BarcodeScanner } from "./barcode-scanner";
 import { ManualAdd } from "./manual-add";
+import { AiCollectionNotice } from "@/components/privacy-notices";
 import { InfoNotice } from "./notices";
 
 const META: Record<AddMethod, { title: string; blurb: string; Icon: LucideIcon; pageTitle: string; pageSub: string }> = {
@@ -389,6 +390,8 @@ function MethodView({ method, review }: { method: AddMethod; review: boolean }) 
                 </button>
               </div>
             )}
+            {(method === "receipt" || method === "list" || method === "shelf") && <AiCollectionNotice />}
+            {method === "paste" && <AiCollectionNotice what="Pasted text" />}
             {method === "receipt" && <PhotoCapture kind="receipt" onResult={onParsed} />}
             {method === "list" && <PhotoCapture kind="list" onResult={onParsed} />}
             {method === "shelf" && <PhotoCapture kind="shelf" onResult={onParsed} />}

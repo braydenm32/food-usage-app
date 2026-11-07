@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Camera, CircleAlert, Link2, Loader2, PenLine, TriangleAlert, X } from "lucide-react";
+import { AiCollectionNotice } from "@/components/privacy-notices";
 import { Button, Field, Input, Segmented, Sheet } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { downscaleImage } from "@/components/add/image";
@@ -308,6 +309,7 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
                 : "Snap a cookbook page or recipe card, or pick a screenshot. We'll copy out the ingredients and method."}
             </p>
           )}
+          <AiCollectionNotice what="Photos and recipe pages" />
           <input
             ref={fileRef}
             type="file"

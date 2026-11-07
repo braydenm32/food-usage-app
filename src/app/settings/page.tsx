@@ -1,12 +1,13 @@
 "use client";
 
-import { applyBackupExtras, getBackupExtras } from "@/lib/backup-extras";
+import { BACKUP_LIMITS, applyBackupExtras, getAccountExport, getBackupExtras, parseBackupText, type ParsedBackup } from "@/lib/backup-extras";
+import { clearAllLocalData } from "@/lib/local-data";
+import { SensitiveConsent } from "@/components/privacy-notices";
 import { useMealLog } from "@/lib/nutrition/meal-log";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, CalendarDays, ChartColumn, ChevronDown, ChevronRight, Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { Bell, CalendarDays, ChartColumn, ChevronDown, ChevronRight, Download, Plus, ShieldCheck, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { z } from "zod";
 import { DEFAULT_LOCATIONS, normalisePersisted, useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { getFoodType } from "@/lib/shelf-life/foods";
@@ -219,46 +220,12 @@ function TagInput({
   );
 }
 
-/* ---------- Import validation ---------- */
+/* ---------- Export ---------- */
 
-/**
- * Shape check for a backup. Only `items` is required; everything else is optional and gets
- * defaults here, then `normalisePersisted` fills in profile arrays, settings and the built-in spots.
- */
-const importSchema = z.object({
-  items: z.array(z.object({ id: z.string(), name: z.string(), locationId: z.string(), quantity: z.number() }).loose()),
-  events: z.array(z.object({ id: z.string(), type: z.string(), at: z.string() }).loose()).default([]),
-  locations: z
-    .array(z.object({ id: z.string(), name: z.string(), kind: z.enum(["pantry", "fridge", "freezer"]) }).loose())
-    .default([]),
-  overrides: z.record(z.string(), z.object({ foodTypeId: z.string() }).loose()).default({}),
-  profile: z
-    .object({
-      householdName: z.string().optional(),
-      people: z.number().optional(),
-      diets: z.array(z.string()).default([]),
-      allergies: z.array(z.string()).default([]),
-      likes: z.array(z.string()).default([]),
-      dislikes: z.array(z.string()).default([]),
-    })
-    .loose()
-    .default({ diets: [], allergies: [], likes: [], dislikes: [] }),
-  settings: z
-    .object({
-      theme: z.enum(["system", "light", "dark"]).optional(),
-      digest: z.enum(["off", "daily", "weekly"]).optional(),
-    })
-    .loose()
-    .default({}),
-  savedRecipes: z.array(z.object({ id: z.string(), title: z.string(), ingredients: z.array(z.any()) }).loose()).default([]),
-  shoppingList: z.array(z.object({ id: z.string(), name: z.string(), checked: z.boolean() }).loose()).default([]),
-  mealPlan: z.array(z.object({ id: z.string(), date: z.string(), recipeId: z.string() }).loose()).default([]),
-  // Optional: older backups have no staples, and then the current ones are kept.
-  staples: z.array(z.object({ id: z.string(), name: z.string() }).loose()).optional(),
-});
-
-function exportSnapshot() {
+async function exportSnapshot() {
   const s = useLarder.getState();
+  // Signed in: add what the server holds about this account. Fails soft when offline.
+  const account = await getAccountExport();
   return {
     app: "larder",
     version: 1,
@@ -277,6 +244,7 @@ function exportSnapshot() {
       // Barcodes are device-local memory and are never exported or replaced by an import.
     },
     extras: getBackupExtras(),
+    ...(account ? { account } : {}),
   };
 }
 
@@ -297,6 +265,7 @@ export default function SettingsPage() {
   const removeOverride = useLarder((s) => s.removeOverride);
   const resetAll = useLarder((s) => s.resetAll);
   const loadDemoData = useLarder((s) => s.loadDemoData);
+  const consented = Boolean(profile.sensitiveConsentAt);
   const syncingWith = useSyncStatus((s) => s.householdName ?? (s.householdId ? "your household" : null));
   const syncing = syncingWith !== null;
 
@@ -308,7 +277,7 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [confirmErase, setConfirmErase] = useState(false);
   /** A parsed backup waiting for "Replace" to be confirmed. */
-  const [pendingImport, setPendingImport] = useState<{ data: z.infer<typeof importSchema>; exportedAt?: string; extras?: unknown } | null>(null);
+  const [pendingImport, setPendingImport] = useState<ParsedBackup | null>(null);
   const hasAccount = useSyncStatus((s) => Boolean(s.userId && s.householdId));
   /** Reminders can arrive with Larder closed: push set up here, an account in a household, and a browser that can. */
   const background = backgroundPushConfigured && hasAccount && (typeof window === "undefined" || browserSupportsPush());
@@ -389,8 +358,8 @@ export default function SettingsPage() {
     });
   };
 
-  const exportJson = () => {
-    const blob = new Blob([JSON.stringify(exportSnapshot(), null, 2)], { type: "application/json" });
+  const exportJson = async () => {
+    const blob = new Blob([JSON.stringify(await exportSnapshot(), null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
@@ -404,29 +373,25 @@ export default function SettingsPage() {
   };
 
   const importJson = async (file: File) => {
-    try {
-      const raw: unknown = JSON.parse(await file.text());
-      // Accept our export, or a raw zustand persist blob.
-      const candidate =
-        raw && typeof raw === "object" && "state" in raw ? (raw as { state: unknown }).state : raw;
-      const parsed = importSchema.safeParse(candidate);
-      if (!parsed.success) {
-        const first = parsed.error.issues[0];
-        toast(`That file isn't a Larder backup (${first ? `${first.path.join(".") || "root"}: ${first.message}` : "unknown format"}).`, {
-          tone: "error",
-        });
-        return;
-      }
-      const exportedAt =
-        raw && typeof raw === "object" && "exportedAt" in raw && typeof (raw as { exportedAt: unknown }).exportedAt === "string"
-          ? (raw as { exportedAt: string }).exportedAt
-          : undefined;
-      // Nothing changes until "Replace" is confirmed.
-      const extras = raw && typeof raw === "object" && "extras" in raw ? (raw as { extras: unknown }).extras : undefined;
-      setPendingImport({ data: parsed.data, exportedAt, extras });
-    } catch {
-      toast("Couldn't read that file. It should be a .json export from Larder.", { tone: "error" });
+    // Refuse oversized files before reading them into memory.
+    if (file.size > BACKUP_LIMITS.bytes) {
+      toast("That file is too big to be a Larder backup (over 20 MB), so nothing was changed.", { tone: "error" });
+      return;
     }
+    let content: string;
+    try {
+      content = await file.text();
+    } catch {
+      toast("Couldn't read that file. It should be a .json export from Larder, so nothing was changed.", { tone: "error" });
+      return;
+    }
+    // Nothing changes until "Replace" is confirmed, and a bad file changes nothing at all.
+    const result = parseBackupText(content);
+    if (!result.ok) {
+      toast(result.message, { tone: "error" });
+      return;
+    }
+    setPendingImport(result.backup);
   };
 
   const confirmImport = () => {
@@ -508,7 +473,17 @@ export default function SettingsPage() {
               <RowLabel label="People" description="Used to size recipes and portions." />
               <Stepper value={profile.people} onChange={(v) => setProfile({ people: v })} min={1} label="people" />
             </Row>
+            {!consented && (
+              <Row>
+                <SensitiveConsent
+                  checked={false}
+                  onChange={(on) => on && setProfile({ sensitiveConsentAt: new Date().toISOString() })}
+                />
+                <p className="mt-2 text-xs text-ink-3">Tick to unlock ways of eating and allergies.</p>
+              </Row>
+            )}
             <Row>
+              <fieldset disabled={!consented} className={cx("min-w-0 border-0 p-0", !consented && "opacity-60")}>
               <p className="mb-2 text-sm font-medium text-ink-2">Ways of eating</p>
               <div className="flex flex-wrap gap-2">
                 {DIETS.map((d) => {
@@ -526,20 +501,31 @@ export default function SettingsPage() {
                   );
                 })}
               </div>
+              </fieldset>
             </Row>
             <Row className="flex flex-col gap-5">
-              <TagInput
-                label="Allergies"
-                values={profile.allergies}
-                onChange={(v) => setProfile({ allergies: v })}
-                placeholder="Peanuts, shellfish…"
-              />
+              <fieldset disabled={!consented} className={cx("min-w-0 border-0 p-0", !consented && "opacity-60")}>
+                <TagInput
+                  label="Allergies"
+                  values={profile.allergies}
+                  onChange={(v) => setProfile({ allergies: v })}
+                  placeholder="Peanuts, shellfish…"
+                />
+              </fieldset>
               <TagInput label="Likes" values={profile.likes} onChange={(v) => setProfile({ likes: v })} placeholder="Spicy, noodles…" />
               <TagInput
                 label="Dislikes"
                 values={profile.dislikes}
                 onChange={(v) => setProfile({ dislikes: v })}
                 placeholder="Coriander, olives…"
+              />
+            </Row>
+            <Row className="py-1">
+              <Switch
+                checked={settings.aiIncludeProfile !== false}
+                onChange={(on) => setSettings({ aiIncludeProfile: on })}
+                label="Include allergies and diets in AI recipe requests"
+                description="On: ideas respect them. Off: the AI only hears how many people, and Larder still hides recipes with your allergens."
               />
             </Row>
           </Group>
@@ -901,8 +887,10 @@ export default function SettingsPage() {
                   </p>
                   <p id="erase-body" className="mt-1 text-sm text-ink-2">
                     This removes {items.length} item{items.length === 1 ? "" : "s"} and all history. Export a copy first if you might
-                    want it back.
-                    {syncing && ` This device also stops syncing; ${syncingWith} keeps its food.`}
+                    want it back, including any AI ideas, timers and cached recipes kept here.
+                    {syncing
+                      ? ` This device also stops syncing. Copies on the server stay until you leave the household or delete your account, and ${syncingWith} keeps its food.`
+                      : " Copies on a server, if you've ever signed in, stay until you leave the household or delete your account."}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button variant="secondary" size="sm" onClick={() => setConfirmErase(false)} autoFocus>
@@ -916,6 +904,8 @@ export default function SettingsPage() {
                         getSyncEngine()?.unbind();
                         resetAll();
                         useMealLog.getState().clear();
+                        // Also the AI ideas, cook timers, caches and other small remembered bits.
+                        clearAllLocalData();
                         setConfirmErase(false);
                         toast("Everything's been erased");
                       }}
@@ -937,6 +927,7 @@ export default function SettingsPage() {
                 Version {APP_VERSION}. Made for Australian kitchens.
               </p>
             </Row>
+            <LinkRow href="/privacy" label="Privacy policy" description="What Larder collects, who sees it, and your choices." Icon={ShieldCheck} />
             <Row>
               <p className="text-[15px] font-medium text-ink">How dates are estimated</p>
               <p className="mt-1 text-sm text-ink-2">

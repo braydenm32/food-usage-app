@@ -384,6 +384,13 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object"
  * arrays, settings and profile are merged over the defaults, and the built-in spots always exist.
  * Used by the persist migrate/merge and by Settings → Import.
  */
+function normaliseSettings(raw: Record<string, unknown>): Settings {
+  const s = { ...DEFAULT_SETTINGS, ...raw } as Settings;
+  // Optional flag: anything but a real boolean means "not set" (treated as on).
+  if (typeof s.aiIncludeProfile !== "boolean") delete s.aiIncludeProfile;
+  return s;
+}
+
 export function normalisePersisted(raw: unknown): PersistedData {
   const p = obj(raw);
   const profile = obj(p.profile);
@@ -400,8 +407,9 @@ export function normalisePersisted(raw: unknown): PersistedData {
       allergies: arr(profile.allergies),
       likes: arr(profile.likes),
       dislikes: arr(profile.dislikes),
+      sensitiveConsentAt: typeof profile.sensitiveConsentAt === "string" ? profile.sensitiveConsentAt : undefined,
     } as HouseholdProfile,
-    settings: { ...DEFAULT_SETTINGS, ...obj(p.settings) } as Settings,
+    settings: normaliseSettings(obj(p.settings)),
     savedRecipes: arr<Recipe>(p.savedRecipes),
     shoppingList: arr<ShoppingListItem>(p.shoppingList),
     mealPlan: arr<MealPlanEntry>(p.mealPlan),

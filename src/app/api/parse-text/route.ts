@@ -1,5 +1,5 @@
 import { getAnthropic } from "@/lib/ai";
-import { lineToDraft, matchRate, parseLocalList, type ApiError, type ParseResponse } from "@/lib/drafts";
+import { lineToDraft, matchRate, parseLocalList, scrubPersonalInfo, type ApiError, type ParseResponse } from "@/lib/drafts";
 import { ExtractError, extractWithClaude, extractionToDrafts } from "@/lib/extract-lines";
 
 const MAX_CHARS = 30_000;
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const extraction = await extractWithClaude({ kind: local.orderEmail ? "order" : "list", text });
+    const extraction = await extractWithClaude({ kind: local.orderEmail ? "order" : "list", text: scrubPersonalInfo(text) });
     const drafts = extractionToDrafts(extraction);
     if (drafts.length === 0) {
       if (localDrafts.length) return Response.json(localResult);
