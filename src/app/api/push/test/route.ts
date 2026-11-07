@@ -1,5 +1,9 @@
-import { adminClient, claimTestSend, digestPayload, householdRows, pushConfig, scheduleOf, lastSendError, sendPush, TEST_COOLDOWN_SECONDS } from "@/lib/push/server";
+import { adminClient, claimTestSend, digestPayload, householdRows, pushConfig, scheduleOf, sendPush, TEST_COOLDOWN_SECONDS } from "@/lib/push/server";
 import { householdDigest } from "@/lib/push/digest";
+import { readCappedJson } from "@/lib/http-body";
+import { bearerToken } from "@/lib/server-auth";
+
+const MAX_BODY_BYTES = 4 * 1024;
 
 function error(status: number, code: string, message: string) {
   return Response.json({ error: code, message }, { status });
@@ -12,14 +16,13 @@ function error(status: number, code: string, message: string) {
 export async function POST(request: Request) {
   const cfg = pushConfig();
   if (!cfg) return error(503, "not_configured", "Background reminders aren't available yet.");
-  const auth = request.headers.get("authorization");
-  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : "";
+  const token = bearerToken(request);
   if (!token) return error(401, "unauthorised", "Sign in to send a test reminder.");
 
   let endpoint = "";
   try {
-    const body = (await request.json()) as { endpoint?: unknown };
-    endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
+    const body = (await readCappedJson(request, MAX_BODY_BYTES)) as { endpoint?: unknown } | null;
+    endpoint = typeof body?.endpoint === "string" ? body.endpoint : "";
   } catch {
     // Handled below.
   }
@@ -56,25 +59,16 @@ export async function POST(request: Request) {
   } catch {
     // Send the plain test message.
   }
-  const result = await sendPush(cfg, sub, payload);
-  if (result === "gone") {
+  const sent = await sendPush(cfg, sub, payload);
+  if (sent.result === "gone") {
     await db.from("push_subscriptions").delete().eq("id", sub.id);
     return error(410, "gone", "This device stopped accepting notifications. Turn reminders off and on again.");
   }
-  if (result === "failed") {
-    const why = lastSendError;
-    // A 401/403 from the push service, or a key error, means the server's VAPID setup is wrong, not the device.
-    const config = !why?.status || why.status === 401 || why.status === 403;
-    return Response.json(
-      {
-        error: "failed",
-        message: config
-          ? `The reminder server's notification keys don't look right${why?.status ? ` (push service said ${why.status})` : why?.message ? `: ${why.message}` : ""}. Check the VAPID settings.`
-          : "Couldn't reach this device's notification service. Try again in a minute.",
-        detail: why,
-      },
-      { status: 502 },
-    );
+  if (sent.result === "failed") {
+    // The push service's own words stay in the server log (sendPush logs them); a 401/403 or a
+    // key error there usually means the server's VAPID keys need fixing.
+    console.error("[push] test send failed", { status: sent.error.status });
+    return error(502, "failed", "Couldn't send a test reminder right now. Try again in a minute.");
   }
   return Response.json({ ok: true });
 }
