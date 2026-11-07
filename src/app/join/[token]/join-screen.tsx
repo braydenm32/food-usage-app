@@ -9,7 +9,7 @@ import { useHydrated } from "@/lib/use-hydrated";
 import { getSupabase, supabaseConfigured } from "@/lib/supabase/client";
 import { getSyncEngine } from "@/lib/sync/engine";
 import { hasLocalData } from "@/lib/sync/apply";
-import { explain, joinHousehold, nameFromEmail, peekInvite, type InvitePeek } from "@/lib/sync/household";
+import { INVITE_LIFETIME, explain, joinHousehold, nameFromEmail, peekInvite, type InvitePeek } from "@/lib/sync/household";
 import { useSyncStatus } from "@/lib/sync/status";
 import { AuthPanel } from "@/components/account/auth-panel";
 import {
@@ -17,6 +17,8 @@ import {
   NotConfigured,
   Notice,
   SkeletonCards,
+  defaultJoinMode,
+  previousWarning,
   unsyncedWarning,
   useAuthReturn,
   type JoinMode,
@@ -72,7 +74,9 @@ function InviteDetails({ token }: { token: string }) {
   const itemCount = useLarder((s) => s.items.length);
   const [peek, setPeek] = useState<Peek>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
-  const [mode, setMode] = useState<JoinMode>("merge");
+  // Food that came from another household (or another account) shouldn't be merged by default.
+  const [mode, setMode] = useState<JoinMode>(() => defaultJoinMode(status.previous, Boolean(status.householdId)));
+  const carried = previousWarning(status.previous, status.userId);
   const [name, setName] = useState(() => nameFromEmail(status.email));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,11 +117,11 @@ function InviteDetails({ token }: { token: string }) {
   if (!invite || invite.expired) {
     return (
       <Card className="p-5">
-        <p className="font-display text-xl text-ink">{invite ? "This invite has expired" : "This invite link isn't valid"}</p>
+        <p className="font-display text-xl text-ink">{invite ? "This invite can't be used any more" : "This invite link isn't valid"}</p>
         <p className="mt-2 text-[15px] text-ink-2">
           {invite
-            ? `Invite links last 7 days. Ask someone in ${invite.householdName} to make a new one under Sync and share.`
-            : "It may have been copied only partly, or it was cancelled. Ask for a new link and open it on this device."}
+            ? `Each invite link lets one person join and lasts ${INVITE_LIFETIME}. This one has been used, cancelled or has run out. Ask someone in ${invite.householdName} to make you a new one under Sync and share.`
+            : "It may have been copied only partly. Ask for a new link and open it on this device."}
         </p>
         <Link href="/account" className={buttonClass("secondary", "md") + " mt-4"}>
           Go to Sync and share
@@ -196,6 +200,13 @@ function InviteDetails({ token }: { token: string }) {
             <Input id={id} value={name} maxLength={60} autoComplete="given-name" onChange={(e) => setName(e.target.value)} placeholder="Sam" />
           )}
         </Field>
+        {local && carried && <Notice tone="warn">{carried}</Notice>}
+        {local && status.householdId && !carried && mode === "merge" && (
+          <Notice tone="warn">
+            The food on this device is {status.householdName ?? "the other household"}&apos;s. Bringing it in shares it with everyone in{" "}
+            {householdName}.
+          </Notice>
+        )}
         {local && <JoinModeChoice householdName={householdName} value={mode} onChange={setMode} itemCount={itemCount} />}
         {unsynced > 0 && (
           <div role="alert">

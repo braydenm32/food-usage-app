@@ -36,6 +36,7 @@ import {
   quarantine,
   requeueFailed,
   type OutboxEntry,
+  type PreviousBinding,
   type RecordRow,
   type SyncMeta,
 } from "@/lib/sync/outbox";
@@ -219,7 +220,9 @@ export class SyncEngine {
       // A different account signed in on this device: don't send its changes to the old household.
       // (Signing out through the app flushes and asks first; this only catches other routes.)
       const dropped = pendingCount(this.meta);
-      this.save({ ...emptyMeta() });
+      // Remember whose household the food here came from, so the new account is steered to
+      // start fresh rather than carry it into a household of its own.
+      this.save({ ...emptyMeta(), previous: { userId: this.meta.userId, householdName: this.meta.householdName } });
       if (dropped > 0) {
         this.notice = `A different account signed in, so ${dropped} change${dropped === 1 ? "" : "s"} that hadn't synced to the previous household won't be sent. Your food is still on this device.`;
       }
@@ -409,6 +412,12 @@ export class SyncEngine {
 
   /* ---------- Realtime ---------- */
 
+  /**
+   * Live "something changed" pings. The publication only carries INSERT and UPDATE (realtime
+   * doesn't check row-level security on DELETE events): removals are tombstones, which arrive
+   * as updates, and losing a household or membership shows up as a refused pull (42501), which
+   * runs verifyMembership.
+   */
   private openChannel(hid: string) {
     this.closeChannel();
     this.channelFor = hid;
@@ -416,7 +425,12 @@ export class SyncEngine {
       .channel(`household-records:${hid}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "household_records", filter: `household_id=eq.${hid}` },
+        { event: "INSERT", schema: "public", table: "household_records", filter: `household_id=eq.${hid}` },
+        () => this.schedulePull(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "household_records", filter: `household_id=eq.${hid}` },
         () => this.schedulePull(),
       );
     channel.subscribe((status) => {
@@ -546,13 +560,60 @@ export class SyncEngine {
     this.save(emptyMeta());
   }
 
-  async signOut() {
+  /** The household this device's food came from, when it isn't syncing with it any more. */
+  get previousBinding(): PreviousBinding | null {
+    return this.meta.previous;
+  }
+
+  /**
+   * Sign out on this device.
+   * - keepData false: the household's food, list, recipes and history are removed from this
+   *   device (settings stay). True keeps them, and remembers where they came from so whoever
+   *   signs in next is steered to start fresh instead of merging them into another household.
+   * - everywhere: also end this account's sessions on every other device. If that can't reach
+   *   the server, this device is still signed out; resolves false then.
+   */
+  async signOut(opts: { keepData?: boolean; everywhere?: boolean } = {}): Promise<boolean> {
+    const { keepData = true, everywhere = false } = opts;
     // Remove this device's push subscription while still signed in (row-level security needs
     // the session), but never hold up signing out for long.
     await Promise.race([removePushSubscription().catch(() => undefined), new Promise((r) => setTimeout(r, 4000))]);
+    const from: PreviousBinding | null = this.meta.householdId
+      ? { userId: this.meta.userId, householdName: this.meta.householdName }
+      : this.meta.previous;
     this.resetBinding();
+    if (!keepData) {
+      this.applyToStore(replacedState());
+      try {
+        // Recipe ideas made from that food.
+        localStorage.removeItem("larder-ai-ideas");
+      } catch {
+        /* storage blocked */
+      }
+    } else if (from) {
+      this.save({ ...this.meta, previous: from });
+    }
+    if (everywhere) {
+      const { error } = await this.client.auth.signOut({ scope: "global" });
+      if (!error) return true;
+      await this.client.auth.signOut({ scope: "local" });
+      return false;
+    }
     // Local scope: other devices signed in to this account stay signed in.
     await this.client.auth.signOut({ scope: "local" });
+    return true;
+  }
+
+  /**
+   * After the account has been deleted on the server: stop everything and forget the session.
+   * The caller wipes local data and reloads.
+   */
+  async afterAccountDeleted() {
+    // The server rows went with the account; this unsubscribes the browser too.
+    await Promise.race([removePushSubscription().catch(() => undefined), new Promise((r) => setTimeout(r, 4000))]);
+    this.resetBinding();
+    await this.client.auth.signOut({ scope: "local" }).catch(() => undefined);
+    this.stop();
   }
 
   /**
@@ -604,6 +665,7 @@ export class SyncEngine {
       householdName: this.syncing ? this.meta.householdName : null,
       failed: this.syncing ? this.meta.failed : [],
       notice: this.notice,
+      previous: this.syncing ? null : this.meta.previous,
     });
   }
 }

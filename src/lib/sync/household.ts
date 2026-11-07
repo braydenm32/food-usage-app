@@ -24,8 +24,10 @@ export interface InvitePeek {
   expired: boolean;
 }
 
-/** How long invite links last (set by the database default). */
-export const INVITE_DAYS = 7;
+/** How long invite links last (set by the database default). Each link lets one person join. */
+export const INVITE_HOURS = 48;
+/** "2 days", for copy. */
+export const INVITE_LIFETIME = `${INVITE_HOURS / 24} days`;
 
 /** Turn a Supabase/network error into a sentence for the screen. */
 export function explain(e: unknown, fallback = "Something went wrong. Try again."): string {
@@ -41,8 +43,9 @@ export function explain(e: unknown, fallback = "Something went wrong. Try again.
   if (/at most 5 households/i.test(msg)) return "You can be in up to 5 households. Leave one before starting or joining another.";
   if (/household is full/i.test(msg)) return "That household is full. A household can have up to 20 people.";
   if (/too many open invites/i.test(msg)) {
-    return `This household has too many invite links waiting to be used. Older ones stop working after ${INVITE_DAYS} days; try again then.`;
+    return `This household has too many invite links waiting to be used. Cancel the open ones below, or wait: links stop working after ${INVITE_LIFETIME}.`;
   }
+  if (/cannot be moved/i.test(msg)) return "That change belongs to a different household, so it wasn't saved.";
   if (/storage limit/i.test(msg)) return "This household has reached its storage limit, so new changes can't sync.";
   if (/not signed in|jwt/i.test(msg)) return "Your sign-in has expired. Sign in again.";
   return msg ? `${fallback} (${msg})` : fallback;
@@ -139,6 +142,55 @@ export async function leaveHousehold(client: LarderClient, householdId: string) 
   const uid = await userId(client);
   const { error } = await client.from("household_members").delete().eq("household_id", householdId).eq("user_id", uid);
   if (error) throw error;
+}
+
+/**
+ * Owner only: take someone out of the household. Row-level security lets an owner delete any
+ * membership in their household; the database then revokes every open invite, so the person
+ * can't come back with a link they still hold.
+ */
+export async function removeMember(client: LarderClient, householdId: string, memberId: string) {
+  const { data, error } = await client
+    .from("household_members")
+    .delete()
+    .eq("household_id", householdId)
+    .eq("user_id", memberId)
+    .select("user_id");
+  if (error) throw error;
+  if (!data?.length) throw new Error("Only the person who started the household can remove people.");
+}
+
+/** Stop every invite link for this household that hasn't been used yet. Resolves to how many. */
+export async function cancelOpenInvites(client: LarderClient, householdId: string): Promise<number> {
+  const { data, error } = await client
+    .from("household_invites")
+    .update({ revoked: true })
+    .eq("household_id", householdId)
+    .eq("revoked", false)
+    .is("used_at", null)
+    .select("token");
+  if (error) throw error;
+  return data?.length ?? 0;
+}
+
+/**
+ * Delete this account on the server (`/api/account/delete`). Memberships and reminder
+ * subscriptions go with it; records shared with a household stay for the others. Throws an
+ * Error with a sentence for the screen.
+ */
+export async function deleteAccount(client: LarderClient): Promise<void> {
+  const { data } = await client.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Your sign-in has expired. Sign in again, then delete your account.");
+  let res: Response;
+  try {
+    res = await fetch("/api/account/delete", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    throw new Error("Couldn't reach Larder. Check your connection and try again.");
+  }
+  if (res.ok) return;
+  const body = (await res.json().catch(() => ({}))) as { message?: unknown };
+  throw new Error(typeof body.message === "string" ? body.message : "Couldn't delete your account. Try again in a minute.");
 }
 
 /** A sensible default name from an email address: "sam.lee@…" → "Sam". */

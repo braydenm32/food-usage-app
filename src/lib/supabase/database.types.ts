@@ -26,6 +26,8 @@ export type Database = {
           household_id: string
           revoked: boolean
           token: string
+          used_at: string | null
+          used_by: string | null
         }
         Insert: {
           created_at?: string
@@ -34,6 +36,8 @@ export type Database = {
           household_id: string
           revoked?: boolean
           token?: string
+          used_at?: string | null
+          used_by?: string | null
         }
         Update: {
           created_at?: string
@@ -42,6 +46,8 @@ export type Database = {
           household_id?: string
           revoked?: boolean
           token?: string
+          used_at?: string | null
+          used_by?: string | null
         }
         Relationships: [
           {
@@ -128,18 +134,21 @@ export type Database = {
       }
       households: {
         Row: {
+          bytes_used: number
           created_at: string
           created_by: string | null
           id: string
           name: string
         }
         Insert: {
+          bytes_used?: number
           created_at?: string
           created_by?: string | null
           id?: string
           name?: string
         }
         Update: {
+          bytes_used?: number
           created_at?: string
           created_by?: string | null
           id?: string

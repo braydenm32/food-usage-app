@@ -53,6 +53,8 @@ class FakeServer {
   /** Rows above this seq count as "not settled yet" (written under a minute ago). */
   settledUpTo = Infinity;
   onChange: (() => void) | null = null;
+  signOuts: string[] = [];
+  failGlobalSignOut = false;
   write(r: Omit<Row, "seq">) {
     const row = { ...r, data: r.deleted ? null : JSON.parse(JSON.stringify(r.data)), seq: ++this.seq };
     this.rows.set(`${r.household_id}/${r.collection}/${r.id}`, row);
@@ -134,7 +136,10 @@ function fakeClient(server: FakeServer) {
     auth: {
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
       getSession: async () => ({ data: { session } }),
-      signOut: async () => ({ error: null }),
+      signOut: async (o: { scope: string }) => {
+        server.signOuts.push(o.scope);
+        return { error: o.scope === "global" && server.failGlobalSignOut ? { message: "offline" } : null };
+      },
     },
     from: query,
     channel: () => channel,
@@ -429,5 +434,44 @@ describe("SyncEngine", () => {
     const left = await engine.flushPending();
     expect(left).toBeGreaterThan(0);
     expect(left).toBe(Object.keys(meta().outbox).length);
+  });
+
+  it("sign out can remove the household's food from this device", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Milk")], "manual");
+    s().setSettings({ useSoonDays: 4 });
+    await settle();
+    expect(await engine.signOut({ keepData: false })).toBe(true);
+    expect(s().items).toHaveLength(0);
+    expect(s().settings.useSoonDays).toBe(4);
+    expect(meta().householdId).toBeNull();
+    expect(meta().previous).toBeNull();
+    expect(server.signOuts).toEqual(["local"]);
+    // Nothing was sent as deletes to the household.
+    expect(server.all("h1").some((r) => r.collection === "items" && !r.deleted)).toBe(true);
+  });
+
+  it("sign out keeping the food remembers where it came from, until the next bind", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Milk")], "manual");
+    await settle();
+    await engine.signOut({ keepData: true });
+    expect(s().items).toHaveLength(1);
+    expect(meta().previous).toEqual({ userId: "user-1", householdName: "The Lees" });
+    const { syncStatusStore } = await import("./status");
+    expect(syncStatusStore.getState().previous).toEqual({ userId: "user-1", householdName: "The Lees" });
+    await engine.bind("h2", "Elsewhere", "replace");
+    expect(meta().previous).toBeNull();
+  });
+
+  it("sign out of all devices falls back to this device when the server can't be reached", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    server.failGlobalSignOut = true;
+    expect(await engine.signOut({ everywhere: true })).toBe(false);
+    expect(server.signOuts).toEqual(["global", "local"]);
+    server.signOuts = [];
+    server.failGlobalSignOut = false;
+    expect(await engine.signOut({ everywhere: true })).toBe(true);
+    expect(server.signOuts).toEqual(["global"]);
   });
 });
