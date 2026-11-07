@@ -497,4 +497,18 @@ describe("scrubPersonalInfo", () => {
     expect(out).toContain("Hi");
     expect(scrubPersonalInfo("milk 2L\n2x tins tomatoes\nbananas")).toBe("milk 2L\n2x tins tomatoes\nbananas");
   });
+  it("keeps items that only look like street names", () => {
+    const list = "1 Milky Way\n2 Rocky Road\n2 Rocky Road ice cream 1L $7.50\n3 Golden Gaytime Way\n1 Kingston Drive biscuits";
+    expect(scrubPersonalInfo(list)).toBe(list);
+  });
+  it("still drops street lines with a suburb, state, postcode or unit", () => {
+    for (const line of ["45 Smith Street, Newtown", "7 George St Sydney NSW", "88 Albert Road 4000", "Apt 3/12 Rocky Road", "Unit 5 Rocky Road", "4/88 Milky Way"]) {
+      expect(scrubPersonalInfo(`milk\n${line}\nbread`)).toBe("milk\nbread");
+    }
+  });
+  it("drops the lines under a bare delivery label", () => {
+    const text = "Deliver to:\nSam Nguyen\n3 Rocky Road\nBrisbane\n\n1 Rocky Road $4.00\nmilk";
+    expect(scrubPersonalInfo(text)).toBe("\n1 Rocky Road $4.00\nmilk");
+    expect(scrubPersonalInfo("Delivery address:\n2 Milky Way\n1 Milky Way $1.50")).toBe("1 Milky Way $1.50");
+  });
 });

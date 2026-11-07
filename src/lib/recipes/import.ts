@@ -219,8 +219,13 @@ function findRecipeNode(data: Json, depth = 0): Record<string, Json> | null {
  * indexOf (or a literal search), so the work grows with the page size, not its square.
  */
 
-/** Pages are cut to this many characters before parsing. Recipe data sits near the top. */
+/** Pages are cut to this many characters before turning them into text (pageText). */
 export const MAX_HTML_CHARS = 512 * 1024;
+/**
+ * JSON-LD is looked for in the whole fetched page (safe-fetch stops at 1 MB): heavy pages often
+ * put it near the end. The scan is linear, so this cap is only a backstop for other callers.
+ */
+export const MAX_LD_JSON_SCAN_CHARS = 1024 * 1024;
 
 /** Replace every `<...>` tag with a space. An unclosed `<` (no `>` after it) is left as text. */
 export function stripTags(s: string): string {
@@ -404,7 +409,7 @@ export function tablespoonFor(url: string | undefined): 15 | 20 {
 
 /** Find and convert the schema.org Recipe in a page's HTML, or null when there isn't one. */
 export function recipeFromHtml(html: string, url?: string): Recipe | null {
-  for (const block of ldJsonBlocks(html.slice(0, MAX_HTML_CHARS))) {
+  for (const block of ldJsonBlocks(html.slice(0, MAX_LD_JSON_SCAN_CHARS))) {
     let data: Json;
     try {
       data = JSON.parse(block.trim());

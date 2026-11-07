@@ -5,6 +5,7 @@ import { getSupabase } from "@/lib/supabase/client";
 import { syncStatusStore } from "@/lib/sync/status";
 import { useLarder } from "@/lib/store";
 import { isSafeId } from "@/lib/sync/collections";
+import { webUrl } from "@/lib/web-url";
 import { useMealLog, type MealEntry, type Target } from "@/lib/nutrition/meal-log";
 import { NUTRIENTS, type NutrientKey } from "@/lib/nutrition/nutrients";
 import type { Staple } from "@/lib/types";
@@ -139,66 +140,112 @@ export function applyBackupExtras(raw: unknown): { staples: number; meals: numbe
 
 /* ---------- Reading a backup file ---------- */
 
-const safeId = z.string().refine(isSafeId, "unsafe id");
-const text = (max: number) => z.string().max(max);
+/*
+ * A backup is the user's own data, often years old (recipes saved from TheMealDB long ago can
+ * have a link without "https://" or an empty image). So cosmetic problems are tidied rather than
+ * refused: odd links are dropped, long text is cut short, numbers are kept in range, and a row
+ * that can't be used at all is left out. What stays strict: the file size, how many rows each
+ * list may have, and ids that could reach object prototypes (those mean the file was made to
+ * cause trouble, so nothing is restored).
+ */
+
+/** Largest number restored for a quantity or price. */
+const MAX_AMOUNT = 1_000_000;
+
+const UNSAFE_ID = "unsafe id";
+const safeId = z.string().refine(isSafeId, UNSAFE_ID);
+/** A string cut to `max` characters. */
+const text = (max: number) => z.string().transform((v) => v.slice(0, max));
+/** Optional text: cut short, or left out when it isn't text. */
+const textOpt = (max: number) => text(max).nullish().catch(undefined);
 const iso = z.string().max(40).refine((v) => !Number.isNaN(Date.parse(v)), "not a date");
-const isoOpt = iso.nullish();
+/** Optional date: left out when it isn't one. */
+const isoOpt = iso.nullish().catch(undefined);
 const num = z.number(); // zod 4 rejects NaN and Infinity
-const numOpt = num.nullish();
+const amount = num.transform((n) => Math.min(Math.max(n, 0), MAX_AMOUNT));
+const numOpt = num.nullish().catch(undefined);
+const amountOpt = amount.nullish().catch(undefined);
+/** Only plain http(s) links are kept; anything else (schemeless, empty, javascript:) is dropped. */
 const httpUrl = z
-  .string()
-  .max(2000)
-  .refine((v) => {
-    try {
-      const u = new URL(v);
-      return u.protocol === "http:" || u.protocol === "https:";
-    } catch {
-      return false;
-    }
-  }, "only http(s) links are allowed");
-const tags = z.array(text(100)).max(BACKUP_LIMITS.tags).default([]);
+  .unknown()
+  .optional()
+  .transform((v) => (typeof v === "string" && v.length <= 2000 ? webUrl(v) : undefined));
+/** Text tags: non-text dropped, each cut to 100 characters. The count stays a hard cap. */
+const tags = z
+  .array(z.unknown())
+  .max(BACKUP_LIMITS.tags)
+  .transform((a) => a.filter((t): t is string => typeof t === "string").map((t) => t.slice(0, 100)))
+  .default([]);
+
+/**
+ * A list of rows, at most `max` of them (more refuses the file). A row with an unsafe id refuses
+ * the file too; any other row that doesn't fit `row` is left out.
+ */
+function rows<T extends z.ZodType>(row: T, max: number) {
+  return z
+    .array(z.unknown())
+    .max(max)
+    .transform((list, ctx) => {
+      const out: z.output<T>[] = [];
+      for (const r of list) {
+        if (isObj(r) && typeof r.id === "string" && !isSafeId(r.id)) {
+          ctx.addIssue({ code: "custom", message: UNSAFE_ID });
+          return z.NEVER;
+        }
+        const parsed = row.safeParse(r);
+        if (parsed.success) out.push(parsed.data);
+      }
+      return out;
+    });
+}
 
 /**
  * Shape check for a backup. Only `items` is required; everything else is optional and gets
  * defaults here, then `normalisePersisted` fills in profile arrays, settings and the built-in spots.
  */
 export const importSchema = z.object({
-  items: z
-    .array(
-      z
-        .object({
-          id: safeId,
-          name: text(300),
-          locationId: text(100),
-          quantity: num,
-          initialQuantity: numOpt,
-          price: numOpt,
-          addedAt: isoOpt,
-          printedDate: isoOpt,
-          openedAt: isoOpt,
-          frozenAt: isoOpt,
-          thawedAt: isoOpt,
-          notes: text(2000).nullish(),
-        })
-        .loose(),
-    )
-    .max(BACKUP_LIMITS.items),
-  events: z
-    .array(z.object({ id: safeId, type: text(40), at: iso, quantity: numOpt, value: numOpt }).loose())
-    .max(BACKUP_LIMITS.events)
-    .default([]),
-  locations: z
-    .array(z.object({ id: safeId, name: text(100), kind: z.enum(["pantry", "fridge", "freezer"]) }).loose())
-    .max(BACKUP_LIMITS.locations)
-    .default([]),
+  items: rows(
+    z
+      .object({
+        id: safeId,
+        name: text(300),
+        locationId: text(100),
+        quantity: amount,
+        initialQuantity: amountOpt,
+        price: amountOpt,
+        addedAt: isoOpt,
+        printedDate: isoOpt,
+        openedAt: isoOpt,
+        frozenAt: isoOpt,
+        thawedAt: isoOpt,
+        notes: textOpt(2000),
+      })
+      .loose(),
+    BACKUP_LIMITS.items,
+  ),
+  events: rows(z.object({ id: safeId, type: text(40), at: iso, quantity: numOpt, value: numOpt }).loose(), BACKUP_LIMITS.events).default([]),
+  locations: rows(
+    z.object({ id: safeId, name: text(100), kind: z.enum(["pantry", "fridge", "freezer"]) }).loose(),
+    BACKUP_LIMITS.locations,
+  ).default([]),
   overrides: z
-    .record(z.string(), z.object({ foodTypeId: text(100) }).loose())
+    .record(z.string(), z.unknown())
     .refine((o) => Object.keys(o).length <= BACKUP_LIMITS.overrides, "too many overrides")
+    .transform((o) => {
+      // Keys were checked on the raw object (parseBackupText). A bad entry is left out.
+      const entry = z.object({ foodTypeId: text(100) }).loose();
+      const out: Record<string, z.output<typeof entry>> = {};
+      for (const [k, v] of Object.entries(o)) {
+        const parsed = entry.safeParse(v);
+        if (parsed.success) out[k] = parsed.data;
+      }
+      return out;
+    })
     .default({}),
   profile: z
     .object({
-      householdName: text(200).optional(),
-      people: z.number().optional(),
+      householdName: textOpt(200),
+      people: num.optional().catch(undefined),
       diets: tags,
       allergies: tags,
       likes: tags,
@@ -208,39 +255,31 @@ export const importSchema = z.object({
     .default({ diets: [], allergies: [], likes: [], dislikes: [] }),
   settings: z
     .object({
-      theme: z.enum(["system", "light", "dark"]).optional(),
-      digest: z.enum(["off", "daily", "weekly"]).optional(),
+      theme: z.enum(["system", "light", "dark"]).optional().catch(undefined),
+      digest: z.enum(["off", "daily", "weekly"]).optional().catch(undefined),
     })
     .loose()
     .default({}),
-  savedRecipes: z
-    .array(
-      z
-        .object({
-          id: safeId,
-          title: text(300),
-          ingredients: z.array(z.any()).max(500),
-          steps: z.array(z.any()).max(500).optional(),
-          sourceUrl: httpUrl.nullish(),
-          image: httpUrl.nullish(),
-        })
-        .loose(),
-    )
-    .max(BACKUP_LIMITS.recipes)
-    .default([]),
-  shoppingList: z
-    .array(z.object({ id: safeId, name: text(300), checked: z.boolean() }).loose())
-    .max(BACKUP_LIMITS.shoppingList)
-    .default([]),
-  mealPlan: z
-    .array(z.object({ id: safeId, date: text(40), recipeId: text(100) }).loose())
-    .max(BACKUP_LIMITS.mealPlan)
-    .default([]),
+  savedRecipes: rows(
+    z
+      .object({
+        id: safeId,
+        title: text(300),
+        ingredients: z.array(z.any()).max(500),
+        steps: z.array(z.any()).max(500).optional().catch(undefined),
+        sourceUrl: httpUrl,
+        image: httpUrl,
+      })
+      .loose(),
+    BACKUP_LIMITS.recipes,
+  ).default([]),
+  shoppingList: rows(
+    z.object({ id: safeId, name: text(300), checked: z.boolean().catch(false) }).loose(),
+    BACKUP_LIMITS.shoppingList,
+  ).default([]),
+  mealPlan: rows(z.object({ id: safeId, date: z.string().max(40), recipeId: z.string().max(100) }).loose(), BACKUP_LIMITS.mealPlan).default([]),
   // Optional: older backups have no staples, and then the current ones are kept.
-  staples: z
-    .array(z.object({ id: safeId, name: text(300) }).loose())
-    .max(BACKUP_LIMITS.staples)
-    .optional(),
+  staples: rows(z.object({ id: safeId, name: text(300) }).loose(), BACKUP_LIMITS.staples).optional(),
 });
 
 export type ParsedBackup = { data: z.infer<typeof importSchema>; exportedAt?: string; extras?: unknown };
@@ -297,12 +336,27 @@ export interface AccountExport {
   pushSubscriptions: Array<Record<string, unknown>>;
 }
 
+/** How long Export waits for the account section before going ahead without it. */
+export const ACCOUNT_EXPORT_TIMEOUT = 4000;
+
 /**
  * What the server holds about this account, read with the user's own session (row-level rules
- * only allow their own rows). Returns null when signed out, offline, or anything fails, so an
- * export always still works.
+ * only allow their own rows). Returns null when signed out, offline, slow (over ~4 s), or
+ * anything fails, so an export always still works.
  */
-export async function getAccountExport(): Promise<AccountExport | null> {
+export async function getAccountExport(timeoutMs = ACCOUNT_EXPORT_TIMEOUT): Promise<AccountExport | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([readAccountExport(), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readAccountExport(): Promise<AccountExport | null> {
   try {
     const { userId, email } = syncStatusStore.getState();
     const supabase = getSupabase();

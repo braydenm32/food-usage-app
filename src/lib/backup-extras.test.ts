@@ -1,5 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { BACKUP_LIMITS, applyBackupExtras, getBackupExtras, parseBackupText } from "./backup-extras";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// A server that never answers, for the account export's time limit.
+const hang = () => new Promise(() => undefined);
+vi.mock("@/lib/supabase/client", () => {
+  const q = { select: () => q, eq: () => hang() };
+  return { getSupabase: () => ({ from: () => q }) };
+});
+
+import { BACKUP_LIMITS, applyBackupExtras, getAccountExport, getBackupExtras, parseBackupText } from "./backup-extras";
+import { syncStatusStore } from "./sync/status";
 import { useLarder } from "./store";
 import { useMealLog } from "./nutrition/meal-log";
 
@@ -64,18 +73,91 @@ describe("parseBackupText with hostile files", () => {
     expect(ok({ savedRecipes: recipes }).ok).toBe(false);
   });
 
-  it("checks field types", () => {
-    expect(ok({ items: [{ ...item, quantity: "lots" }] }).ok).toBe(false);
-    expect(parseBackupText('{"state":{"items":[{"id":"a","name":"x","locationId":"f","quantity":1e999}]}}').ok).toBe(false);
-    expect(ok({ items: [{ ...item, openedAt: "not a date" }] }).ok).toBe(false);
+  it("leaves out rows that can't be used, and keeps the rest", () => {
+    const r = ok({ items: [{ ...item, quantity: "lots" }, { ...item, id: "i2", name: 7 }, null, { ...item, id: "i3" }] });
+    expect(r.ok && r.backup.data.items.map((i) => i.id)).toEqual(["i3"]);
+    const inf = parseBackupText('{"state":{"items":[{"id":"a","name":"x","locationId":"f","quantity":1e999}]}}');
+    expect(inf.ok && inf.backup.data.items).toEqual([]);
+  });
+
+  it("tidies cosmetic fields instead of refusing the file", () => {
+    const r = ok({
+      items: [{ ...item, openedAt: "not a date", notes: "n".repeat(5000), name: "x".repeat(400), quantity: -2, price: 1e12 }],
+      profile: { householdName: 42, diets: ["vegan", 3], allergies: ["a".repeat(150)] },
+      settings: { theme: "neon" },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const i = r.backup.data.items[0];
+    expect(i.openedAt).toBeUndefined();
+    expect(i.notes).toHaveLength(2000);
+    expect(i.name).toHaveLength(300);
+    expect(i.quantity).toBe(0);
+    expect(i.price).toBe(1_000_000);
+    expect(r.backup.data.profile.householdName).toBeUndefined();
+    expect(r.backup.data.profile.diets).toEqual(["vegan"]);
+    expect(r.backup.data.profile.allergies[0]).toHaveLength(100);
+    expect(r.backup.data.settings.theme).toBeUndefined();
     expect(ok({ items: [{ ...item, openedAt: null }] }).ok).toBe(true);
   });
 
-  it("only accepts http(s) links for recipes", () => {
-    const recipe = (extra: object) => ({ savedRecipes: [{ id: "r1", title: "x", ingredients: [], ...extra }] });
-    expect(ok(recipe({ sourceUrl: "javascript:alert(1)" })).ok).toBe(false);
-    expect(ok(recipe({ image: "data:text/html,<script>" })).ok).toBe(false);
-    expect(ok(recipe({ image: "http://example.com/a.jpg" })).ok).toBe(true);
+  it("keeps only http(s) links for recipes, and drops the rest", () => {
+    const recipe = (extra: object) => {
+      const r = ok({ savedRecipes: [{ id: "r1", title: "x", ingredients: [], ...extra }] });
+      return r.ok ? r.backup.data.savedRecipes[0] : null;
+    };
+    expect(recipe({ sourceUrl: "javascript:alert(1)" })?.sourceUrl).toBeUndefined();
+    expect(recipe({ image: "data:text/html,<script>" })?.image).toBeUndefined();
+    expect(recipe({ image: "http://example.com/a.jpg" })?.image).toBe("http://example.com/a.jpg");
+  });
+
+  it("restores a realistic old export with schemeless links and empty images", () => {
+    const old = {
+      app: "larder",
+      version: 1,
+      exportedAt: "2025-03-14T09:30:00.000Z",
+      state: {
+        items: [{ ...item, notes: "" }],
+        events: [{ id: "e1", type: "added", at: "2025-03-01T00:00:00.000Z", itemId: "i1" }],
+        profile: { householdName: "The Lees", people: 2, diets: [], allergies: [], likes: [], dislikes: [] },
+        savedRecipes: [
+          {
+            id: "mealdb-52772",
+            title: "Teriyaki Chicken Casserole",
+            ingredients: [{ name: "soy sauce", quantity: 0.75, unit: "cup" }],
+            steps: ["Preheat oven to 180C."],
+            sourceUrl: "www.bbc.co.uk/food/recipes/teriyaki_chicken_casserole",
+            image: "",
+            source: "themealdb",
+          },
+          {
+            id: "mealdb-52773",
+            title: "Honey Teriyaki Salmon",
+            ingredients: [],
+            sourceUrl: "",
+            image: "https://www.themealdb.com/images/media/meals/xxyupu1468262513.jpg",
+          },
+        ],
+        shoppingList: [{ id: "s1", name: "Rice", checked: "no" }],
+        mealPlan: [],
+      },
+    };
+    const r = parseBackupText(JSON.stringify(old));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const [a, b] = r.backup.data.savedRecipes;
+    expect(a).toMatchObject({ id: "mealdb-52772", title: "Teriyaki Chicken Casserole", source: "themealdb" });
+    expect(a.sourceUrl).toBeUndefined();
+    expect(a.image).toBeUndefined();
+    expect(b.sourceUrl).toBeUndefined();
+    expect(b.image).toBe("https://www.themealdb.com/images/media/meals/xxyupu1468262513.jpg");
+    expect(r.backup.data.shoppingList[0].checked).toBe(false);
+    expect(r.backup.data.items).toHaveLength(1);
+  });
+
+  it("still refuses an unsafe id anywhere", () => {
+    expect(ok({ savedRecipes: [{ id: "__proto__", title: "x", ingredients: [] }] }).ok).toBe(false);
+    expect(ok({ events: [{ id: "constructor", type: "added", at: "2026-11-01T00:00:00.000Z" }] }).ok).toBe(false);
   });
 
   it("rejects too many meals in extras", () => {
@@ -116,5 +198,20 @@ describe("applyBackupExtras with hostile extras", () => {
     });
     expect(useMealLog.getState().targets).toEqual({ protein: { goal: 90 } });
     expect(useMealLog.getState().pinned).toEqual(["protein"]);
+  });
+});
+
+describe("getAccountExport", () => {
+  it("gives up after about 4 seconds so Export still works", async () => {
+    vi.useFakeTimers();
+    try {
+      syncStatusStore.setState({ userId: "u1", email: "sam@example.com" });
+      const p = getAccountExport();
+      await vi.advanceTimersByTimeAsync(4000);
+      await expect(p).resolves.toBeNull();
+    } finally {
+      syncStatusStore.setState({ userId: null, email: null });
+      vi.useRealTimers();
+    }
   });
 });

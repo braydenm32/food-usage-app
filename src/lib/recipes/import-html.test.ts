@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ldJsonBlocks, MAX_HTML_CHARS, pageText, recipeFromHtml, stripTags } from "./import";
+import { ldJsonBlocks, MAX_HTML_CHARS, MAX_LD_JSON_SCAN_CHARS, pageText, recipeFromHtml, stripTags } from "./import";
 
 describe("HTML scanning stays fast on hostile pages", () => {
   const hostile = [
@@ -24,9 +24,16 @@ describe("HTML scanning stays fast on hostile pages", () => {
     expect(performance.now() - start).toBeLessThan(200);
   });
 
-  it("cuts very long pages before parsing", () => {
-    const big = `${"x".repeat(MAX_HTML_CHARS)}<script type="application/ld+json">{"@type":"Recipe","name":"Late","recipeIngredient":["1 egg"]}</script>`;
-    expect(recipeFromHtml(big)).toBeNull();
+  const late = `<script type="application/ld+json">{"@type":"Recipe","name":"Late","recipeIngredient":["1 egg"]}</script>`;
+
+  it("finds recipe data late in a heavy page", () => {
+    const heavy = `${"<div class='x'>filler</div>".repeat(Math.ceil((MAX_HTML_CHARS + 200_000) / 27))}${late}`;
+    expect(heavy.length).toBeGreaterThan(MAX_HTML_CHARS);
+    expect(recipeFromHtml(heavy)?.title).toBe("Late");
+  });
+
+  it("stops looking past the fetch limit", () => {
+    expect(recipeFromHtml(`${"x".repeat(MAX_LD_JSON_SCAN_CHARS)}${late}`)).toBeNull();
   });
 });
 
