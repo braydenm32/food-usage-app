@@ -1,9 +1,12 @@
 import { ExternalLink } from "lucide-react";
 import type { Recipe } from "@/lib/types";
+import { isWebUrl } from "@/lib/web-url";
 
 const linkClass = "inline-flex items-center gap-1 underline underline-offset-2 hover:text-ink";
 
+/** A link out, only to a plain http(s) address (synced or imported data could hold anything); otherwise just the words. */
 function ExtLink({ href, children }: { href: string; children: React.ReactNode }) {
+  if (!isWebUrl(href)) return <>{children}</>;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer" className={linkClass}>
       {children}
@@ -21,7 +24,8 @@ function hostOf(url: string): string | null {
 
 /** Where a recipe comes from, and the credit its licence asks for. Shown under the method. */
 export function RecipeCreditLine({ recipe }: { recipe: Recipe }) {
-  const { credit, sourceUrl } = recipe;
+  const { credit } = recipe;
+  const sourceUrl = isWebUrl(recipe.sourceUrl) ? recipe.sourceUrl : undefined;
 
   let body: React.ReactNode = null;
   if (credit?.licence) {
