@@ -9,7 +9,7 @@ import { useHydrated } from "@/lib/use-hydrated";
 import { getSupabase, supabaseConfigured } from "@/lib/supabase/client";
 import { getSyncEngine } from "@/lib/sync/engine";
 import { hasLocalData } from "@/lib/sync/apply";
-import { INVITE_LIFETIME, explain, joinHousehold, nameFromEmail, peekInvite, type InvitePeek } from "@/lib/sync/household";
+import { INVITE_LIFETIME, checkInvite, explain, joinHousehold, nameFromEmail, type InvitePeek } from "@/lib/sync/household";
 import { useSyncStatus } from "@/lib/sync/status";
 import { AuthPanel } from "@/components/account/auth-panel";
 import {
@@ -87,7 +87,7 @@ function InviteDetails({ token }: { token: string }) {
     let live = true;
     const client = getSupabase();
     if (!client) return;
-    peekInvite(client, token)
+    checkInvite(client, token)
       .then((invite) => live && setPeek({ status: "done", invite }))
       .catch((e) => live && setPeek({ status: "error", message: explain(e, "Couldn't check the invite.") }));
     return () => {
@@ -131,6 +131,8 @@ function InviteDetails({ token }: { token: string }) {
   }
 
   const householdName = invite.householdName;
+  /** Already in it (this invite opened again): opening it here uses nothing up. */
+  const member = invite.alreadyMember === true;
   if (status.householdId === invite.householdId) {
     return (
       <Card className="p-5">
@@ -162,9 +164,11 @@ function InviteDetails({ token }: { token: string }) {
       const hid = await joinHousehold(client, token, name);
       try {
         await engine.bind(hid, householdName, local ? mode : "replace");
-        toast(`You've joined ${householdName}`);
+        toast(member ? `This device now syncs with ${householdName}` : `You've joined ${householdName}`);
       } catch {
-        toast(`You've joined ${householdName}. The first sync will finish when the connection allows.`);
+        toast(
+          `${member ? `This device now syncs with ${householdName}` : `You've joined ${householdName}`}. The first sync will finish when the connection allows.`,
+        );
       }
       router.push("/account");
     } catch (e) {
@@ -178,10 +182,19 @@ function InviteDetails({ token }: { token: string }) {
       <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft text-primary">
         <Users size={24} />
       </span>
-      <h2 className="mt-3 font-display text-2xl leading-tight text-ink">Join {householdName}?</h2>
-      <p className="mt-1 text-[15px] text-ink-2">
-        You&apos;ll share one larder: the same food, shopping list, saved recipes and meal plan, kept in step on every device.
-      </p>
+      {member ? (
+        <>
+          <h2 className="mt-3 font-display text-2xl leading-tight text-ink">You&apos;re already in {householdName}</h2>
+          <p className="mt-1 text-[15px] text-ink-2">This device isn&apos;t syncing with it yet. Open it here to see the same food and list.</p>
+        </>
+      ) : (
+        <>
+          <h2 className="mt-3 font-display text-2xl leading-tight text-ink">Join {householdName}?</h2>
+          <p className="mt-1 text-[15px] text-ink-2">
+            You&apos;ll share one larder: the same food, shopping list, saved recipes and meal plan, kept in step on every device.
+          </p>
+        </>
+      )}
       <form
         className="mt-5 flex flex-col gap-5"
         onSubmit={(e) => {
@@ -191,15 +204,18 @@ function InviteDetails({ token }: { token: string }) {
       >
         {status.householdId && (
           <Notice tone="warn">
-            This device syncs with {status.householdName ?? "another household"} at the moment. Joining {householdName} switches this
-            device over; you&apos;ll still be a member of {status.householdName ?? "the other household"} until you leave it.
+            This device syncs with {status.householdName ?? "another household"} at the moment. {member ? "Opening" : "Joining"}{" "}
+            {householdName} switches this device over; you&apos;ll still be a member of {status.householdName ?? "the other household"} until
+            you leave it.
           </Notice>
         )}
-        <Field label="Your name" hint={`So others in ${householdName} know who's who.`}>
-          {(id) => (
-            <Input id={id} value={name} maxLength={60} autoComplete="given-name" onChange={(e) => setName(e.target.value)} placeholder="Sam" />
-          )}
-        </Field>
+        {!member && (
+          <Field label="Your name" hint={`So others in ${householdName} know who's who.`}>
+            {(id) => (
+              <Input id={id} value={name} maxLength={60} autoComplete="given-name" onChange={(e) => setName(e.target.value)} placeholder="Sam" />
+            )}
+          </Field>
+        )}
         {local && carried && <Notice tone="warn">{carried}</Notice>}
         {local && status.householdId && !carried && mode === "merge" && (
           <Notice tone="warn">
@@ -217,7 +233,17 @@ function InviteDetails({ token }: { token: string }) {
         )}
         <div className="flex flex-col gap-2 sm:flex-row-reverse sm:justify-start">
           <Button type="submit" disabled={busy}>
-            {busy ? "Joining…" : unsynced > 0 ? `Join ${householdName} anyway` : `Join ${householdName}`}
+            {member
+              ? busy
+                ? "Opening…"
+                : unsynced > 0
+                  ? `Open ${householdName} anyway`
+                  : `Open ${householdName} here`
+              : busy
+                ? "Joining…"
+                : unsynced > 0
+                  ? `Join ${householdName} anyway`
+                  : `Join ${householdName}`}
           </Button>
           <Link href="/" className={buttonClass("ghost", "md")}>
             Not now

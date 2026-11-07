@@ -22,16 +22,27 @@ npm run build && npm start
 
 | Variable | What it enables |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | Reading receipt and list photos, AI recipe ideas, smarter order-email parsing. Without it the app still works: paste, barcode and manual add, built-in recipes. |
+| `ANTHROPIC_API_KEY` | Reading receipt and list photos, AI recipe ideas, smarter order-email parsing. Without it the app still works: paste, barcode and manual add, built-in recipes. AI features also need sign-in, so they need `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` on the server and the `ai_usage` migration applied (see "AI features" below). |
+| `AI_DAILY_LIMIT` | Optional. AI calls each signed-in person can make per day (Sydney days). Default 40. |
 | `LARDER_AI_MODEL` | Override the model (default `claude-haiku-5-5`). |
 | `THEMEALDB_API_KEY` | TheMealDB supporter key. Without it the shared test key is used, which is fine for development; get a supporter key before a public launch. |
 | `NEXT_PUBLIC_SUPABASE_URL` | Accounts, household sharing and sync between devices (see below). |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The project's publishable key (safe in the browser; data is protected by row-level security). |
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Background reminders (Web Push), with the two below. See "Background reminders". |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server only. Lets the reminder sender read each household's food, and account deletion remove the account. Never expose it to the browser. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server only. Checks sign-in and counts the daily allowance for AI features, lets the reminder sender read each household's food, and lets account deletion remove the account. Never expose it to the browser. |
 | `CRON_SECRET` | Server only. Protects `/api/push/send`, the hourly reminder sender. |
 
 Copy `.env.example` to `.env.local` and fill in what you need. Without the Supabase variables Larder is purely local: everything stays in the browser and Sync and share says sync isn't set up.
+
+### AI features
+
+The AI routes (`/api/scan`, `/api/parse-text`, `/api/recipes`, `/api/recipes/import`) only answer signed-in people, and count each call against a daily allowance (`AI_DAILY_LIMIT`, default 40 per person per day). The server checks the caller's access token and counts calls with the service-role key, so **before deploying this version**:
+
+1. Apply `supabase/migrations/20261107000100_ai_usage.sql` (the `ai_usage` table and `consume_ai_call`). Without it every AI call fails.
+2. Set `SUPABASE_SERVICE_ROLE_KEY` and `NEXT_PUBLIC_SUPABASE_URL` on the server, beside `ANTHROPIC_API_KEY`. Without them AI features answer "not available" (503) even with an Anthropic key.
+3. Optionally set `AI_DAILY_LIMIT`.
+
+Signed out, the app still reads pasted lists line by line, and the built-in recipes and recipe search work as before.
 
 ## Sync and sharing (Supabase)
 
@@ -42,7 +53,8 @@ Larder stays local-first: the store in localStorage is the source of truth on ea
 - **Conflicts:** last writer wins, per record. A local edit that hasn't been sent yet beats an incoming copy of the same record.
 - **Joining with food already on the device:** either bring it in (the household's copy wins where both have the same record, e.g. the built-in fridge or the household profile) or start fresh with the household's food. When the food here came from another household (the device is linked to one, someone signed out and kept it, or a different account was signed in), the screens default to starting fresh and say why.
 - **Invites:** each link lets one person join and lasts 48 hours. The person who started the household can cancel every open link with "Cancel open invite links" on Sync and share. Leaving cancels the links you made; an owner removing someone cancels them all.
-- **Signing out** asks whether to keep the household's food on this device or remove it (the default). "Sign out of all devices" ends the account's sessions everywhere.
+- **Signing out** asks whether to keep the household's food on this device or remove it (the default). With changes that haven't synced, or when the device isn't syncing with a household any more, the food is always kept. "Sign out of all devices" ends the account's sessions everywhere.
+- **Storage limit:** when the household is full (25,000 live records or about 20 MB), removals still go up first; other changes stay queued, Sync and share says the household is full, and they're offered again after a few minutes or on "Sync now".
 - **Deleting an account** (Sync and share → Danger zone) calls `POST /api/account/delete`, which checks the caller's access token and deletes the `auth.users` row with the service-role key (`SUPABASE_SERVICE_ROLE_KEY`; without it the route answers 503). Memberships and reminder subscriptions are deleted with it; records and invites stay with the household but forget who wrote them; the last member out deletes the household. The device then clears everything Larder stored (`clearAllLocalData` in `src/lib/local-data.ts`).
 
 Code: `src/lib/sync/` (pure diff/outbox/apply logic with tests, plus the engine), `src/lib/supabase/`, screens at `/account` and `/join/[token]`.
@@ -53,7 +65,14 @@ Code: `src/lib/sync/` (pure diff/outbox/apply logic with tests, plus the engine)
 2. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. The Content-Security-Policy in `next.config.ts` allows that URL (https and wss) automatically at build time.
 3. Regenerate `src/lib/supabase/database.types.ts` after changing the schema (`supabase gen types typescript`).
 
-`20261107000000_security_hardening.sql` (safe to run again) takes every table grant away from `anon` and `TRUNCATE`/`REFERENCES`/`TRIGGER` from `authenticated`; stops a record being moved between households; counts only live records toward the 25,000-record limit and adds a byte budget per household (about 20 MB, `households.bytes_used`); closes races in the household limits; makes invites single use for 48 hours; limits the realtime publication to inserts and updates (realtime doesn't apply row-level security to DELETE events); and adds `private.purge_stale_data()`, which deletes invites 30 days after they expire or are used and sign-ups never confirmed after 7 days. If `pg_cron` is enabled when the migration runs it schedules that daily; otherwise, once `pg_cron` is on, run:
+This release adds two migrations. Apply them in this order, before deploying the app:
+
+1. `20261107000000_security_hardening.sql`
+2. `20261107000100_ai_usage.sql`
+
+`supabase db push` applies them in that order (by file name). In the SQL editor, run them one after the other.
+
+`20261107000000_security_hardening.sql` (safe to run again) takes every table grant away from `anon` and `TRUNCATE`/`REFERENCES`/`TRIGGER` from `authenticated`; stops a record being moved between households; counts only live records toward the 25,000-record limit and adds a byte budget per household (about 20 MB, `households.bytes_used`, judged on each write's net change, so a batch that removes as much as it adds always fits); closes races in the household limits; makes invites single use for 48 hours; limits the realtime publication to inserts and updates (realtime doesn't apply row-level security to DELETE events); and adds `private.purge_stale_data()`, which deletes invites 30 days after they expire or are used and sign-ups never confirmed after 7 days. If `pg_cron` is enabled when the migration runs it schedules that daily; otherwise, once `pg_cron` is on, run:
 
 ```sql
 select cron.schedule('larder-retention', '23 3 * * *', 'select private.purge_stale_data()');

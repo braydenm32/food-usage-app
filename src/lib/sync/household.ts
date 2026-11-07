@@ -18,10 +18,12 @@ export interface Member {
 }
 
 export interface InvitePeek {
-  /** Only given for an invite that can still be used. */
+  /** Only given for an invite that can still be used, or when this account is already a member. */
   householdId: string | null;
   householdName: string;
   expired: boolean;
+  /** This account is already in the household (say, the invite it joined with, opened again). */
+  alreadyMember?: boolean;
 }
 
 /** How long invite links last (set by the database default). Each link lets one person join. */
@@ -113,6 +115,24 @@ export async function peekInvite(client: LarderClient, token: string): Promise<I
   if (!row) return null;
   // The server leaves the household id out for an expired or cancelled invite.
   return { householdId: row.household_id, householdName: row.household_name, expired: row.expired || !row.household_id };
+}
+
+/**
+ * Peek at an invite, and when it can't be used any more, check whether this account is already
+ * in that household: `join_household` hands a member the household id back before it looks at
+ * whether the invite is used, and changes nothing then. For anyone else it refuses (nothing is
+ * used up either way, since a used or expired invite can't be used).
+ */
+export async function checkInvite(client: LarderClient, token: string): Promise<InvitePeek | null> {
+  const peek = await peekInvite(client, token);
+  if (!peek || !peek.expired) return peek;
+  try {
+    const hid = await joinHousehold(client, token, "");
+    if (typeof hid === "string" && hid) return { ...peek, householdId: hid, expired: false, alreadyMember: true };
+  } catch {
+    /* not a member: the invite really is spent */
+  }
+  return peek;
 }
 
 export async function joinHousehold(client: LarderClient, token: string, memberName: string): Promise<string> {
