@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { Button, Chip, Input, Sheet, Stepper } from "@/components/ui";
 import { SensitiveConsent } from "@/components/privacy-notices";
 import { DEFAULT_PROFILE, useLarder } from "@/lib/store";
+import { addsSensitive } from "@/lib/sensitive";
 import type { Diet, HouseholdProfile } from "@/lib/types";
 
 const DIETS: Array<{ value: Diet; label: string }> = [
@@ -40,9 +41,10 @@ export function HouseholdPrompt({ open, onDone }: { open: boolean; onDone: () =>
   const [allergies, setAllergies] = useState<string[]>(profile.allergies);
   const [draft, setDraft] = useState("");
   const [consent, setConsent] = useState(false);
-  // Diets and allergies can reveal health or beliefs, so ask once before keeping any.
-  const hasSensitive = diets.length > 0 || allergies.length > 0 || draft.trim().length > 0;
-  const needsConsent = hasSensitive && !profile.sensitiveConsentAt;
+  // Diets and allergies can reveal health or beliefs, so ask once before adding any. Keeping or
+  // removing ones already there needs no tick.
+  const addsNew = addsSensitive(profile, diets, [...allergies, draft]);
+  const needsConsent = addsNew && !profile.sensitiveConsentAt;
   const canSave = !needsConsent || consent;
 
   const addAllergy = () => {
@@ -66,7 +68,7 @@ export function HouseholdPrompt({ open, onDone }: { open: boolean; onDone: () =>
       diets,
       allergies: all,
       confirmed: true,
-      ...(hasSensitive && !profile.sensitiveConsentAt ? { sensitiveConsentAt: new Date().toISOString() } : {}),
+      ...(needsConsent && consent ? { sensitiveConsentAt: new Date().toISOString() } : {}),
     });
     onDone();
   };

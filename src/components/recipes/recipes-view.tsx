@@ -7,7 +7,8 @@ import { BookOpen, CalendarDays, CircleAlert, Download, Globe, Plus, RotateCcw, 
 import { Button, Chip, EmptyState, PageHeader, Segmented, SectionTitle, buttonClass } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { AiDeniedMessage } from "@/components/ai-denied";
-import { aiDenial, aiFetch, type AiDenial } from "@/lib/ai-client";
+import { aiDenial, aiFetch, aiSignInCopy, hasAiSession, type AiDenial } from "@/lib/ai-client";
+import { aiProfile } from "@/lib/sensitive";
 import { RecipeCard, RecipeCardSkeleton } from "@/components/recipes/recipe-card";
 import { AiIdeasNotice } from "@/components/privacy-notices";
 import { ImportSheet } from "@/components/recipes/import-sheet";
@@ -51,6 +52,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
   const views = useItemViews();
   const profile = useLarder((s) => s.profile);
   // Off in Settings: the AI gets only the number of people. The local allergen filter still applies.
+  // Diets and allergies also need the consent tick (see aiProfile).
   const shareProfile = useLarder((s) => s.settings.aiIncludeProfile !== false);
   const saved = useLarder((s) => s.savedRecipes);
 
@@ -132,6 +134,21 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
     return () => ctl.abort();
   }, []);
 
+  // AI ideas need a sign-in: say so up front rather than after a tap (like photo scanning).
+  const [aiSignedOut, setAiSignedOut] = useState(false);
+  useEffect(() => {
+    if (aiConfigured !== true) return;
+    let cancelled = false;
+    const check = () => void hasAiSession().then((has) => !cancelled && setAiSignedOut(!has));
+    check();
+    // Signed in from another tab, or back from the sign-in page.
+    window.addEventListener("focus", check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", check);
+    };
+  }, [aiConfigured]);
+
   const [ai, setAi] = useState<{ state: "idle" | "loading" | "done" | "unconfigured" | "error"; recipes: Recipe[]; message?: string; denied?: AiDenial }>({
     state: "idle",
     recipes: [],
@@ -141,9 +158,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
     () =>
       JSON.stringify({
         items: views.filter((v) => v.expiry.status !== "expired").slice(0, 40).map((v) => ({ name: v.item.name, daysLeft: v.expiry.daysLeft })),
-        profile: shareProfile
-          ? { people: profile.people, diets: profile.diets, allergies: profile.allergies, likes: profile.likes, dislikes: profile.dislikes }
-          : { people: profile.people },
+        profile: aiProfile(profile, shareProfile),
         mustUse: pickedName ? [pickedName] : undefined,
         count: 3,
       }),
@@ -157,6 +172,10 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
     if (cached?.length) setAi({ state: "done", recipes: cached });
   }
   async function getIdeas() {
+    if (!(await hasAiSession())) {
+      setAiSignedOut(true);
+      return;
+    }
     setAi((a) => ({ ...a, state: "loading", message: undefined }));
     try {
       const res = await aiFetch("/api/recipes", {
@@ -170,6 +189,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
         return setAi({ state: "unconfigured", recipes: [] });
       }
       const denied = aiDenial(res.status, data);
+      if (denied === "sign-in") setAiSignedOut(true);
       if (denied) return setAi({ state: "error", recipes: [], denied });
       if (!res.ok) return setAi({ state: "error", recipes: [], message: data.message });
       cacheRecipes(data.recipes);
@@ -409,6 +429,17 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
               <p className="rounded-[var(--radius-card)] border border-line bg-surface p-4 text-sm text-ink-2">
                 AI-written ideas aren&apos;t set up on this device. The built-in recipes above work without them.
               </p>
+            ) : aiSignedOut && ai.state !== "done" ? (
+              <div role="status" className="rounded-[var(--radius-card)] border border-line bg-surface p-4">
+                <p className="text-[15px] font-medium text-ink">Sign in for fresh recipe ideas</p>
+                <p className="mt-1 text-[15px] text-ink-2">
+                  {aiSignInCopy("AI recipe ideas")} They&apos;re written around what&apos;s going off first. The built-in recipes above work
+                  without signing in.
+                </p>
+                <Link href="/account" className={buttonClass("primary", "md") + " mt-3"}>
+                  Sign in
+                </Link>
+              </div>
             ) : (
               <div className="rounded-[var(--radius-card)] border border-line bg-surface p-4">
                 <p className="text-[15px] text-ink-2">
@@ -426,7 +457,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
                       <>
                         <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
                         <span>
-                          <AiDeniedMessage why={ai.denied} />
+                          <AiDeniedMessage why={ai.denied} feature="AI recipe ideas" />
                         </span>
                       </>
                     ) : (

@@ -8,7 +8,9 @@ import { getSupabase } from "@/lib/supabase/client";
  * one and 429 `ai_quota` once today's allowance is used.
  */
 
-export const AI_SIGN_IN_COPY = "Sign in to use photo scanning and AI recipes.";
+/** "Sign in to use recipe ideas.": the sign-in line, worded for the feature asking. */
+export const aiSignInCopy = (feature = "photo scanning and AI recipes") => `Sign in to use ${feature}.`;
+export const AI_SIGN_IN_COPY = aiSignInCopy();
 export const AI_QUOTA_COPY = "You've reached today's AI limit. It resets tomorrow.";
 
 /** The current access token, or null when signed out (or sync isn't set up in this build). */

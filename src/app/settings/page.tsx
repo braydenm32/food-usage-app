@@ -17,7 +17,8 @@ import type { Diet, Settings, StorageLocation } from "@/lib/types";
 import { Button, Card, Chip, Field, IconButton, Input, PageHeader, Segmented, Stepper, Switch, cx } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { SettingsSyncRow } from "@/components/sync-indicator";
-import { getSyncEngine } from "@/lib/sync/engine";
+import { getSyncEngine, withTimeout } from "@/lib/sync/engine";
+import { getSupabase } from "@/lib/supabase/client";
 import { useSyncStatus } from "@/lib/sync/status";
 
 const APP_VERSION = "0.1.0";
@@ -146,16 +147,19 @@ function TagInput({
   values,
   onChange,
   placeholder,
+  canAdd = true,
 }: {
   label: string;
   values: string[];
   onChange: (v: string[]) => void;
   placeholder: string;
+  /** False: what's there can still be removed, but nothing new added. */
+  canAdd?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const add = () => {
     const v = draft.trim().replace(/,+$/, "");
-    if (!v) return;
+    if (!v || !canAdd) return;
     if (!values.some((x) => x.toLowerCase() === v.toLowerCase())) onChange([...values, v]);
     setDraft("");
   };
@@ -191,9 +195,10 @@ function TagInput({
               ))}
             </ul>
           )}
-          <div className="flex gap-2">
+          <div className={cx("flex gap-2", !canAdd && "opacity-60")}>
             <Input
               id={id}
+              disabled={!canAdd}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onKey}
@@ -205,6 +210,7 @@ function TagInput({
             <button
               type="button"
               onClick={add}
+              disabled={!canAdd}
               aria-label={`Add to ${label.toLowerCase()}`}
               className={cx(
                 "flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-colors",
@@ -266,8 +272,10 @@ export default function SettingsPage() {
   const resetAll = useLarder((s) => s.resetAll);
   const loadDemoData = useLarder((s) => s.loadDemoData);
   const consented = Boolean(profile.sensitiveConsentAt);
+  const sensitiveCount = profile.diets.length + profile.allergies.length;
   const syncingWith = useSyncStatus((s) => s.householdName ?? (s.householdId ? "your household" : null));
   const syncing = syncingWith !== null;
+  const signedIn = useSyncStatus((s) => s.userId !== null);
 
   const [newSpot, setNewSpot] = useState({ name: "", kind: "fridge" as StorageLocation["kind"], emoji: "" });
   const [support, setSupport] = useState<NotificationSupport>(() =>
@@ -276,6 +284,25 @@ export default function SettingsPage() {
   const [pushNote, setPushNote] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [confirmErase, setConfirmErase] = useState(false);
+  const [erasing, setErasing] = useState(false);
+
+  const eraseEverything = async () => {
+    setErasing(true);
+    // Erasing this device must not erase the household's copy: stop syncing first. Then stop
+    // this device's reminders and sign out here (both need a moment, but never more than ~4 s
+    // each), so nothing writes the session or the household's food back after the wipe.
+    const engine = getSyncEngine();
+    if (engine) await withTimeout(engine.unbind());
+    const client = getSupabase();
+    if (client) await withTimeout(client.auth.signOut({ scope: "local" }));
+    resetAll();
+    useMealLog.getState().clear();
+    // Also the AI ideas, cook timers, caches and other small remembered bits.
+    clearAllLocalData();
+    setConfirmErase(false);
+    // The in-memory stores would write themselves back: start over.
+    window.location.replace("/");
+  };
   /** A parsed backup waiting for "Replace" to be confirmed. */
   const [pendingImport, setPendingImport] = useState<ParsedBackup | null>(null);
   const hasAccount = useSyncStatus((s) => Boolean(s.userId && s.householdId));
@@ -479,19 +506,25 @@ export default function SettingsPage() {
                   checked={false}
                   onChange={(on) => on && setProfile({ sensitiveConsentAt: new Date().toISOString() })}
                 />
-                <p className="mt-2 text-xs text-ink-3">Tick to unlock ways of eating and allergies.</p>
+                <p className="mt-2 text-xs text-ink-3">
+                  Tick to add ways of eating and allergies.{sensitiveCount > 0 && " You can still remove the ones already here."}
+                </p>
               </Row>
             )}
             <Row>
-              <fieldset disabled={!consented} className={cx("min-w-0 border-0 p-0", !consented && "opacity-60")}>
+              <fieldset className="min-w-0 border-0 p-0">
               <p className="mb-2 text-sm font-medium text-ink-2">Ways of eating</p>
               <div className="flex flex-wrap gap-2">
                 {DIETS.map((d) => {
                   const on = profile.diets.includes(d.value);
+                  // Adding needs consent; taking one away never does.
+                  const locked = !on && !consented;
                   return (
                     <Chip
                       key={d.value}
                       selected={on}
+                      disabled={locked}
+                      className={cx(locked && "opacity-60")}
                       onClick={() =>
                         setProfile({ diets: on ? profile.diets.filter((x) => x !== d.value) : [...profile.diets, d.value] })
                       }
@@ -504,14 +537,13 @@ export default function SettingsPage() {
               </fieldset>
             </Row>
             <Row className="flex flex-col gap-5">
-              <fieldset disabled={!consented} className={cx("min-w-0 border-0 p-0", !consented && "opacity-60")}>
-                <TagInput
-                  label="Allergies"
-                  values={profile.allergies}
-                  onChange={(v) => setProfile({ allergies: v })}
-                  placeholder="Peanuts, shellfish…"
-                />
-              </fieldset>
+              <TagInput
+                label="Allergies"
+                values={profile.allergies}
+                onChange={(v) => setProfile({ allergies: v })}
+                placeholder="Peanuts, shellfish…"
+                canAdd={consented}
+              />
               <TagInput label="Likes" values={profile.likes} onChange={(v) => setProfile({ likes: v })} placeholder="Spicy, noodles…" />
               <TagInput
                 label="Dislikes"
@@ -891,6 +923,7 @@ export default function SettingsPage() {
                     {syncing
                       ? ` This device also stops syncing. Copies on the server stay until you leave the household or delete your account, and ${syncingWith} keeps its food.`
                       : " Copies on a server, if you've ever signed in, stay until you leave the household or delete your account."}
+                    {signedIn && " It also signs you out on this device."}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button variant="secondary" size="sm" onClick={() => setConfirmErase(false)} autoFocus>
@@ -899,19 +932,10 @@ export default function SettingsPage() {
                     <Button
                       variant="danger"
                       size="sm"
-                      onClick={() => {
-                        // Erasing this device must not erase the household's copy.
-                        getSyncEngine()?.unbind();
-                        resetAll();
-                        useMealLog.getState().clear();
-                        // Also the AI ideas, cook timers, caches and other small remembered bits.
-                        clearAllLocalData();
-                        setConfirmErase(false);
-                        // The in-memory stores and sign-in session would write themselves back: start over.
-                        window.location.replace("/");
-                      }}
+                      onClick={() => void eraseEverything()}
+                      disabled={erasing}
                     >
-                      Yes, erase everything
+                      {erasing ? "Erasing…" : "Yes, erase everything"}
                     </Button>
                   </div>
                 </div>

@@ -9,7 +9,7 @@ import { Button, Field, Input, Segmented, Sheet } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { downscaleImage } from "@/components/add/image";
 import { AiDeniedMessage } from "@/components/ai-denied";
-import { AI_QUOTA_COPY, AI_SIGN_IN_COPY, aiDenial, aiFetch, type AiDenial } from "@/lib/ai-client";
+import { AI_QUOTA_COPY, AI_SIGN_IN_COPY, aiDenial, aiFetch, aiSignInCopy, type AiDenial } from "@/lib/ai-client";
 import { formatAmount } from "@/lib/recipes/quantity";
 import { EditRecipeSheet, blankRecipe } from "./edit-recipe-sheet";
 import { useLarder } from "@/lib/store";
@@ -65,7 +65,9 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
       if (ctl.signal.aborted) return;
       const denied = aiDenial(res.status, d);
       if (denied) {
-        setState({ kind: "error", denied, message: denied === "quota" ? AI_QUOTA_COPY : d.message || AI_SIGN_IN_COPY });
+        // The server's own words when it says something specific (a link that needs AI), else ours.
+        const signIn = d.message && d.message !== AI_SIGN_IN_COPY ? d.message : aiSignInCopy("AI recipe import");
+        setState({ kind: "error", denied, message: denied === "quota" ? AI_QUOTA_COPY : signIn });
         return;
       }
       if (!res.ok || !d.recipe) throw new Error(d.message || "Couldn't import that recipe.");
