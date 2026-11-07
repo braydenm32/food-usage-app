@@ -1,11 +1,15 @@
-import { NextResponse } from "next/server";
+import { connection, NextResponse } from "next/server";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import Anthropic from "@anthropic-ai/sdk";
 import { AI_MODEL, AI_NOT_CONFIGURED, getAnthropic } from "@/lib/ai";
+import { BodyTooLargeError, readCappedText } from "@/lib/http-body";
 import { ingredient, slugId } from "@/lib/recipes/map";
+import { aiAuthConfigured, authenticateAi, consumeAiCall } from "@/lib/server-auth";
 import type { Recipe } from "@/lib/types";
 
+/** Writing recipes can take a while; leave room for the AI's timeout and one quick retry. */
+export const maxDuration = 60;
 
 const MAX_BODY_BYTES = 64 * 1024;
 const shortList = z.array(z.string().max(60)).max(30).default([]);
@@ -53,23 +57,29 @@ Rules:
 
 /** GET /api/recipes tells the page whether AI ideas are available, so it can hide the button when not. */
 export async function GET() {
-  return NextResponse.json({ configured: !!getAnthropic() });
+  await connection(); // read the env at request time, not at build
+  return NextResponse.json({ configured: !!getAnthropic() && aiAuthConfigured(), signIn: "required" });
 }
 
+/** POST with `Authorization: Bearer <Supabase access token>`; each call counts against the daily AI allowance. */
 export async function POST(req: Request) {
   const client = getAnthropic();
   if (!client) return NextResponse.json(AI_NOT_CONFIGURED, { status: 503 });
+  const user = await authenticateAi(req);
+  if (!user.ok) return user.response;
 
   let input: z.infer<typeof RequestSchema>;
   try {
-    const body = await req.text();
-    if (body.length > MAX_BODY_BYTES) {
+    input = RequestSchema.parse(JSON.parse(await readCappedText(req, MAX_BODY_BYTES)));
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) {
       return NextResponse.json({ error: "too_large", message: "That request was too big." }, { status: 413 });
     }
-    input = RequestSchema.parse(JSON.parse(body));
-  } catch {
     return NextResponse.json({ error: "bad_request", message: "That request was not in the right shape." }, { status: 400 });
   }
+
+  const denied = await consumeAiCall(user);
+  if (denied) return denied;
 
   const count = input.count ?? 3;
   const { profile } = input;

@@ -69,6 +69,17 @@ export interface SyncMeta {
    * complete pull. Persisted so a failed first pull (or a closed tab) doesn't lose them.
    */
   pendingMerge: boolean;
+  /**
+   * The household this device's food last synced with, kept after signing out (when the person
+   * chose to keep it) or when a different account signs in. While set, the next account is
+   * steered to start fresh rather than bring that food into another household. Cleared on bind.
+   */
+  previous: PreviousBinding | null;
+}
+
+export interface PreviousBinding {
+  userId: string | null;
+  householdName: string | null;
 }
 
 export const emptyMeta = (): SyncMeta => ({
@@ -82,7 +93,17 @@ export const emptyMeta = (): SyncMeta => ({
   lastSyncedAt: null,
   failed: [],
   pendingMerge: false,
+  previous: null,
 });
+
+const parsePrevious = (p: unknown): PreviousBinding | null => {
+  const x = p as Partial<PreviousBinding> | null;
+  if (!x || typeof x !== "object") return null;
+  return {
+    userId: typeof x.userId === "string" ? x.userId : null,
+    householdName: typeof x.householdName === "string" ? x.householdName : null,
+  };
+};
 
 const isFailed = (f: unknown): f is FailedChange => {
   const x = f as FailedChange | null;
@@ -103,6 +124,7 @@ export function parseMeta(raw: string | null): SyncMeta {
       outbox: m.outbox && typeof m.outbox === "object" ? m.outbox : {},
       failed: Array.isArray(m.failed) ? m.failed.filter(isFailed) : [],
       pendingMerge: m.pendingMerge === true,
+      previous: parsePrevious(m.previous),
     };
   } catch {
     return emptyMeta();
@@ -146,10 +168,12 @@ export function enqueue(meta: SyncMeta, changes: Change[]): SyncMeta {
   return { ...meta, outbox, rev };
 }
 
-/** Up to `size` entries to send, oldest first. */
-export function nextBatch(meta: SyncMeta, size = 200): OutboxEntry[] {
+/** Up to `size` entries to send: removals first, then oldest first. `deletesOnly` sends only removals. */
+export function nextBatch(meta: SyncMeta, size = 200, deletesOnly = false): OutboxEntry[] {
+  // Removals first: they free room, so a household at its storage limit can still shrink.
   return Object.values(meta.outbox)
-    .sort((a, b) => a.rev - b.rev)
+    .filter((e) => !deletesOnly || e.op === "delete")
+    .sort((a, b) => Number(b.op === "delete") - Number(a.op === "delete") || a.rev - b.rev)
     .slice(0, size);
 }
 
@@ -227,13 +251,16 @@ export interface PreparedBatch {
 export function prepareBatch(entries: OutboxEntry[], state: SyncedState, householdId: string, maxBytes = MAX_RECORD_BYTES): PreparedBatch {
   const out: PreparedBatch = { entries: [], rows: [], tooLarge: [] };
   const rows = buildRows(entries, state, householdId);
-  rows.forEach((row, i) => {
+  // Tombstones first (an upsert whose record has gone locally is one too).
+  const order = rows.map((_, i) => i).sort((a, b) => Number(rows[b].deleted) - Number(rows[a].deleted) || a - b);
+  for (const i of order) {
+    const row = rows[i];
     if (recordBytes(row) > maxBytes) out.tooLarge.push(entries[i]);
     else {
       out.entries.push(entries[i]);
       out.rows.push(row);
     }
-  });
+  }
   return out;
 }
 

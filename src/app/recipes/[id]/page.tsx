@@ -24,6 +24,7 @@ import { toLocalISODate } from "@/lib/shelf-life/engine";
 import { useItemViews } from "@/lib/selectors";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
+import { isWebUrl } from "@/lib/web-url";
 import type { PantryItem, Recipe } from "@/lib/types";
 
 export default function RecipeDetailPage() {
@@ -34,10 +35,19 @@ export default function RecipeDetailPage() {
   );
 }
 
+function safeDecode(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return "";
+  }
+}
+
 function RecipeLoader() {
   const hydrated = useHydrated();
   const params = useParams<{ id: string }>();
-  const id = decodeURIComponent(params.id);
+  // A malformed escape ("%E0%A4%A") would throw; an empty id falls through to "can't find that recipe".
+  const id = safeDecode(params.id);
   const saved = useLarder((s) => s.savedRecipes);
   const mealPlan = useLarder((s) => s.mealPlan);
 
@@ -91,10 +101,10 @@ function RecipeLoader() {
       <EmptyState
         emoji="📝"
         title="This recipe has no ingredient list"
-        body={recipe.sourceUrl ? "The source didn't share one. Check the original page." : "There's nothing here to cook from. Head back and pick another."}
+        body={isWebUrl(recipe.sourceUrl) ? "The source didn't share one. Check the original page." : "There's nothing here to cook from. Head back and pick another."}
         action={
           <div className="flex flex-wrap justify-center gap-2">
-            {recipe.sourceUrl && (
+            {isWebUrl(recipe.sourceUrl) && (
               <a href={recipe.sourceUrl} target="_blank" rel="noreferrer" className={buttonClass("secondary")}>
                 Check the source
               </a>

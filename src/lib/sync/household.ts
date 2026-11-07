@@ -18,14 +18,18 @@ export interface Member {
 }
 
 export interface InvitePeek {
-  /** Only given for an invite that can still be used. */
+  /** Only given for an invite that can still be used, or when this account is already a member. */
   householdId: string | null;
   householdName: string;
   expired: boolean;
+  /** This account is already in the household (say, the invite it joined with, opened again). */
+  alreadyMember?: boolean;
 }
 
-/** How long invite links last (set by the database default). */
-export const INVITE_DAYS = 7;
+/** How long invite links last (set by the database default). Each link lets one person join. */
+export const INVITE_HOURS = 48;
+/** "2 days", for copy. */
+export const INVITE_LIFETIME = `${INVITE_HOURS / 24} days`;
 
 /** Turn a Supabase/network error into a sentence for the screen. */
 export function explain(e: unknown, fallback = "Something went wrong. Try again."): string {
@@ -41,8 +45,9 @@ export function explain(e: unknown, fallback = "Something went wrong. Try again.
   if (/at most 5 households/i.test(msg)) return "You can be in up to 5 households. Leave one before starting or joining another.";
   if (/household is full/i.test(msg)) return "That household is full. A household can have up to 20 people.";
   if (/too many open invites/i.test(msg)) {
-    return `This household has too many invite links waiting to be used. Older ones stop working after ${INVITE_DAYS} days; try again then.`;
+    return `This household has too many invite links waiting to be used. Cancel the open ones below, or wait: links stop working after ${INVITE_LIFETIME}.`;
   }
+  if (/cannot be moved/i.test(msg)) return "That change belongs to a different household, so it wasn't saved.";
   if (/storage limit/i.test(msg)) return "This household has reached its storage limit, so new changes can't sync.";
   if (/not signed in|jwt/i.test(msg)) return "Your sign-in has expired. Sign in again.";
   return msg ? `${fallback} (${msg})` : fallback;
@@ -112,6 +117,24 @@ export async function peekInvite(client: LarderClient, token: string): Promise<I
   return { householdId: row.household_id, householdName: row.household_name, expired: row.expired || !row.household_id };
 }
 
+/**
+ * Peek at an invite, and when it can't be used any more, check whether this account is already
+ * in that household: `join_household` hands a member the household id back before it looks at
+ * whether the invite is used, and changes nothing then. For anyone else it refuses (nothing is
+ * used up either way, since a used or expired invite can't be used).
+ */
+export async function checkInvite(client: LarderClient, token: string): Promise<InvitePeek | null> {
+  const peek = await peekInvite(client, token);
+  if (!peek || !peek.expired) return peek;
+  try {
+    const hid = await joinHousehold(client, token, "");
+    if (typeof hid === "string" && hid) return { ...peek, householdId: hid, expired: false, alreadyMember: true };
+  } catch {
+    /* not a member: the invite really is spent */
+  }
+  return peek;
+}
+
 export async function joinHousehold(client: LarderClient, token: string, memberName: string): Promise<string> {
   const { data, error } = await client.rpc("join_household", {
     invite_token: token,
@@ -139,6 +162,55 @@ export async function leaveHousehold(client: LarderClient, householdId: string) 
   const uid = await userId(client);
   const { error } = await client.from("household_members").delete().eq("household_id", householdId).eq("user_id", uid);
   if (error) throw error;
+}
+
+/**
+ * Owner only: take someone out of the household. Row-level security lets an owner delete any
+ * membership in their household; the database then revokes every open invite, so the person
+ * can't come back with a link they still hold.
+ */
+export async function removeMember(client: LarderClient, householdId: string, memberId: string) {
+  const { data, error } = await client
+    .from("household_members")
+    .delete()
+    .eq("household_id", householdId)
+    .eq("user_id", memberId)
+    .select("user_id");
+  if (error) throw error;
+  if (!data?.length) throw new Error("Only the person who started the household can remove people.");
+}
+
+/** Stop every invite link for this household that hasn't been used yet. Resolves to how many. */
+export async function cancelOpenInvites(client: LarderClient, householdId: string): Promise<number> {
+  const { data, error } = await client
+    .from("household_invites")
+    .update({ revoked: true })
+    .eq("household_id", householdId)
+    .eq("revoked", false)
+    .is("used_at", null)
+    .select("token");
+  if (error) throw error;
+  return data?.length ?? 0;
+}
+
+/**
+ * Delete this account on the server (`/api/account/delete`). Memberships and reminder
+ * subscriptions go with it; records shared with a household stay for the others. Throws an
+ * Error with a sentence for the screen.
+ */
+export async function deleteAccount(client: LarderClient): Promise<void> {
+  const { data } = await client.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Your sign-in has expired. Sign in again, then delete your account.");
+  let res: Response;
+  try {
+    res = await fetch("/api/account/delete", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    throw new Error("Couldn't reach Larder. Check your connection and try again.");
+  }
+  if (res.ok) return;
+  const body = (await res.json().catch(() => ({}))) as { message?: unknown };
+  throw new Error(typeof body.message === "string" ? body.message : "Couldn't delete your account. Try again in a minute.");
 }
 
 /** A sensible default name from an email address: "sam.lee@…" → "Sam". */

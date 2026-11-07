@@ -2,34 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Mail } from "lucide-react";
+import Link from "next/link";
 import { getSupabase, providerEnabled } from "@/lib/supabase/client";
 import { Button, Card, Field, Input } from "@/components/ui";
+import { authMessage, RETURN_CODE_PROVIDER_OFF } from "@/components/account/auth-errors";
+
+export { authMessage };
 
 const RESEND_SECONDS = 60;
-
-/** Auth errors in plain words. */
-export function authMessage(e: unknown): string {
-  if (typeof navigator !== "undefined" && !navigator.onLine) return "You're offline. Connect to the internet and try again.";
-  const err = e as { message?: string; status?: number; code?: string } | null;
-  const msg = err?.message ?? "";
-  if (err?.status === 429 || /rate limit|only request this after|security purposes/i.test(msg)) {
-    const secs = msg.match(/after (\d+) seconds?/)?.[1];
-    return secs
-      ? `Too many tries. Wait ${secs} seconds, then try again.`
-      : "Too many emails sent recently. Wait a few minutes, then try again.";
-  }
-  if (/expired|invalid|otp/i.test(msg) && /token|otp|code/i.test(msg)) return "That code didn't work. It may have expired: check it, or send a new one.";
-  if (/flow state|code verifier|both auth code and code verifier/i.test(msg)) {
-    return "That sign-in link was opened in a different browser from the one that asked for it. Enter the code from the email instead, or send a new one from here.";
-  }
-  if (/signups not allowed|signup is disabled/i.test(msg)) return "Larder isn't taking new accounts right now. Try again later.";
-  if (/provider is not enabled|unsupported provider/i.test(msg)) return "Google sign-in isn't switched on for Larder yet. Use your email instead.";
-  if (/invalid email|unable to validate email|email address .* is invalid/i.test(msg)) return "That email address doesn't look right. Check it and try again.";
-  if (e instanceof TypeError || /failed to fetch|network|load failed/i.test(msg)) {
-    return "Couldn't reach Larder to sign you in. Check your connection and try again.";
-  }
-  return msg ? `Couldn't sign in: ${msg}` : "Couldn't sign in. Try again.";
-}
 
 function GoogleMark() {
   // Google's "G" in its brand colours (allowed exception to theme tokens: it's a logo).
@@ -112,7 +92,7 @@ export function AuthPanel({ returnPath, intro }: { returnPath: string; intro?: s
     setError(null);
     const enabled = await providerEnabled("google");
     if (enabled === false) {
-      setError("Google sign-in isn't switched on for Larder yet. Use your email instead.");
+      setError(RETURN_CODE_PROVIDER_OFF);
       setBusy(null);
       return;
     }
@@ -164,6 +144,13 @@ export function AuthPanel({ returnPath, intro }: { returnPath: string; intro?: s
             <GoogleMark />
             {busy === "google" ? "Opening Google…" : "Continue with Google"}
           </Button>
+          <p className="text-center text-xs text-ink-3">
+            By signing in you agree to our{" "}
+            <Link href="/privacy" className="underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            .
+          </p>
         </form>
       ) : (
         <form

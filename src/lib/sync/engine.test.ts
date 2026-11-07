@@ -48,11 +48,15 @@ class FakeServer {
   upsertCalls = 0;
   /** after_seq of each pull, in order. */
   pullCalls: number[] = [];
+  /** At its storage limit: refuse (54000) any upsert that writes a live row. */
+  full = false;
   /** Refuse a whole upsert as data (like a check constraint) when any row matches. */
   rejectRow: ((r: Omit<Row, "seq">) => boolean) | null = null;
   /** Rows above this seq count as "not settled yet" (written under a minute ago). */
   settledUpTo = Infinity;
   onChange: (() => void) | null = null;
+  signOuts: string[] = [];
+  failGlobalSignOut = false;
   write(r: Omit<Row, "seq">) {
     const row = { ...r, data: r.deleted ? null : JSON.parse(JSON.stringify(r.data)), seq: ++this.seq };
     this.rows.set(`${r.household_id}/${r.collection}/${r.id}`, row);
@@ -81,6 +85,9 @@ function fakeClient(server: FakeServer) {
         if (server.failUpserts > 0) {
           server.failUpserts--;
           throw new TypeError("Failed to fetch");
+        }
+        if (server.full && rows.some((r) => !r.deleted)) {
+          return { error: { code: "54000", message: "This household has reached its storage limit" } };
         }
         if (server.rejectRow && rows.some(server.rejectRow)) {
           return { error: { code: "23514", message: "new row violates check constraint" } };
@@ -134,7 +141,10 @@ function fakeClient(server: FakeServer) {
     auth: {
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
       getSession: async () => ({ data: { session } }),
-      signOut: async () => ({ error: null }),
+      signOut: async (o: { scope: string }) => {
+        server.signOuts.push(o.scope);
+        return { error: o.scope === "global" && server.failGlobalSignOut ? { message: "offline" } : null };
+      },
     },
     from: query,
     channel: () => channel,
@@ -429,5 +439,115 @@ describe("SyncEngine", () => {
     const left = await engine.flushPending();
     expect(left).toBeGreaterThan(0);
     expect(left).toBe(Object.keys(meta().outbox).length);
+  });
+
+  it("sign out can remove the household's food from this device", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Milk")], "manual");
+    s().setSettings({ useSoonDays: 4 });
+    await settle();
+    expect(await engine.signOut({ keepData: false })).toBe(true);
+    expect(s().items).toHaveLength(0);
+    expect(s().settings.useSoonDays).toBe(4);
+    expect(meta().householdId).toBeNull();
+    expect(meta().previous).toBeNull();
+    expect(server.signOuts).toEqual(["local"]);
+    // Nothing was sent as deletes to the household.
+    expect(server.all("h1").some((r) => r.collection === "items" && !r.deleted)).toBe(true);
+  });
+
+  it("sign out keeping the food remembers where it came from, until the next bind", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Milk")], "manual");
+    await settle();
+    await engine.signOut({ keepData: true });
+    expect(s().items).toHaveLength(1);
+    expect(meta().previous).toEqual({ userId: "user-1", householdName: "The Lees" });
+    const { syncStatusStore } = await import("./status");
+    expect(syncStatusStore.getState().previous).toEqual({ userId: "user-1", householdName: "The Lees" });
+    await engine.bind("h2", "Elsewhere", "replace");
+    expect(meta().previous).toBeNull();
+  });
+
+  it("at the storage limit, sends removals first and stops offering the rest until a retry", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Old"), draft("Older")], "manual");
+    await settle();
+    const old = s().items.find((i) => i.name === "Old")!;
+    server.full = true;
+    s().addItems([draft("New")], "manual");
+    s().deleteItem(old.id);
+    await settle();
+    // The removal went up even though it was queued after the new item.
+    expect(server.rows.get(`h1/items/${old.id}`)?.deleted).toBe(true);
+    const newId = s().items.find((i) => i.name === "New")!.id;
+    expect(server.rows.has(`h1/items/${newId}`)).toBe(false);
+    expect(meta().outbox[`items:${newId}`]).toBeTruthy();
+    const { syncStatusStore } = await import("./status");
+    expect(syncStatusStore.getState().state).toBe("error");
+    expect(syncStatusStore.getState().error).toBe(eng.HOUSEHOLD_FULL_MESSAGE);
+
+    // No hammering: a couple of minutes later, the same batch hasn't been offered again.
+    const calls = server.upsertCalls;
+    await settle(120_000);
+    expect(server.upsertCalls).toBe(calls);
+    // A pull succeeding doesn't hide it either.
+    expect(syncStatusStore.getState().error).toBe(eng.HOUSEHOLD_FULL_MESSAGE);
+
+    // Room made elsewhere, then "Sync now": it goes up and the status clears.
+    server.full = false;
+    engine.syncNow();
+    await settle();
+    expect(server.rows.has(`h1/items/${newId}`)).toBe(true);
+    expect(syncStatusStore.getState().state).toBe("synced");
+  });
+
+  it("sign out never removes changes that haven't synced", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    await settle();
+    server.failUpserts = 100;
+    s().addItems([draft("Unsent")], "manual");
+    await settle();
+    expect(Object.keys(meta().outbox).length).toBeGreaterThan(0);
+    await engine.signOut({ keepData: false });
+    expect(s().items.map((i) => i.name)).toEqual(["Unsent"]);
+    expect(meta().previous).toEqual({ userId: "user-1", householdName: "The Lees" });
+  });
+
+  it("sign out keeps the food when this device isn't syncing with a household", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    s().addItems([draft("Milk")], "manual");
+    await settle();
+    await engine.signOut({ keepData: true });
+    // Signed back in, not bound: only `previous` says where it came from.
+    await engine.signOut({ keepData: false });
+    expect(s().items).toHaveLength(1);
+  });
+
+  it("unbind resolves once the push subscription has been dealt with", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    await expect(engine.unbind()).resolves.toBeUndefined();
+    expect(meta().householdId).toBeNull();
+  });
+
+  it("withTimeout resolves after the time limit when the work hangs", async () => {
+    let done = false;
+    void eng.withTimeout(new Promise(() => undefined), 4000).then(() => (done = true));
+    await settle(3999);
+    expect(done).toBe(false);
+    await settle(2);
+    expect(done).toBe(true);
+    await expect(eng.withTimeout(Promise.reject(new Error("x")))).resolves.toBeUndefined();
+  });
+
+  it("sign out of all devices falls back to this device when the server can't be reached", async () => {
+    await engine.bind("h1", "The Lees", "upload");
+    server.failGlobalSignOut = true;
+    expect(await engine.signOut({ everywhere: true })).toBe(false);
+    expect(server.signOuts).toEqual(["global", "local"]);
+    server.signOuts = [];
+    server.failGlobalSignOut = false;
+    expect(await engine.signOut({ everywhere: true })).toBe(true);
+    expect(server.signOuts).toEqual(["global"]);
   });
 });

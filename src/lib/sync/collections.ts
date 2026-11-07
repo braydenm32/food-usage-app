@@ -197,6 +197,9 @@ function parseProfile(d: Obj): HouseholdProfile {
     likes: strArr(d.likes),
     dislikes: strArr(d.dislikes),
     ...(d.confirmed === true ? { confirmed: true } : {}),
+    ...(isStr(d.sensitiveConsentAt) && !Number.isNaN(Date.parse(d.sensitiveConsentAt))
+      ? { sensitiveConsentAt: d.sensitiveConsentAt }
+      : {}),
   };
 }
 

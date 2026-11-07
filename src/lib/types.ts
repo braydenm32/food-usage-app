@@ -144,6 +144,8 @@ export interface HouseholdProfile {
   dislikes: string[];
   /** Set once the household has answered (or skipped) "Cooking for how many?" on Recipes. */
   confirmed?: boolean;
+  /** When someone acknowledged that diets and allergies are shared with the household and the AI (ISO date-time). */
+  sensitiveConsentAt?: string;
 }
 
 export interface RecipeIngredient {
@@ -246,6 +248,8 @@ export interface Settings {
   onboarded: boolean;
   /** When the weekly "Fridge check" on Today was last done (ISO date-time). */
   fridgeCheckAt?: string;
+  /** Send the household's diets, allergies, likes and dislikes with AI recipe requests. On unless turned off. */
+  aiIncludeProfile?: boolean;
 }
 
 /** A line read from a receipt, list, order or barcode, awaiting review. */

@@ -1004,3 +1004,80 @@ export function offProductToResponse(code: string, p: OffProduct): BarcodeRespon
 
   return { found: true, code, name, brand, quantity: p.quantity, image: p.image_front_small_url, draft };
 }
+
+// --- Personal details in pasted text -------------------------------------------------------
+
+const STREET_WORDS =
+  "street|st|road|rd|avenue|ave|drive|dr|court|ct|place|pl|lane|ln|crescent|cres|parade|pde|boulevard|blvd|highway|hwy|terrace|tce|way|close|cl|circuit|cct|grove|gr";
+const ADDRESS_LINE = new RegExp(
+  `^[ \\t>*-]*(?:(?:unit|apt|apartment|flat|lot|suite)\\s*)?\\d{1,5}[a-z]?(?:\\s*[/-]\\s*\\d{1,5}[a-z]?)?\\s+(?:[\\p{L}'.-]+\\s+){0,3}?[\\p{L}'.-]+\\s+(?:${STREET_WORDS})\\b\\.?(?:[ ,].*)?$`,
+  "iu",
+);
+const STATE_POSTCODE_LINE = /\b(?:NSW|VIC|QLD|SA|WA|TAS|NT|ACT)[ ,]+\d{4}\b/;
+const ADDRESS_LABEL = String.raw`^[ \t>*-]*(?:(?:delivery|shipping|billing|postal|home|pickup|pick-up)\s+)?(?:address|deliver(?:ing)? to|ship(?:ping)? to|bill(?:ing)? to)\s*[:\-]`;
+const ADDRESS_LABEL_LINE = new RegExp(`${ADDRESS_LABEL}\\s*\\S.*$`, "i");
+/** "Delivery address:" alone on its line: the address follows on the next few lines. */
+const ADDRESS_LABEL_ONLY = new RegExp(`${ADDRESS_LABEL}\\s*$`, "i");
+/**
+ * A line shaped like "12 Smith St" is only an address with something else address-like on it:
+ * "1 Milky Way" and "2 Rocky Road" are things people buy.
+ */
+const UNIT_NUMBER = /^[ \t>*-]*(?:(?:unit|apt|apartment|flat|lot|suite)\b|\d{1,5}[a-z]?\s*\/\s*\d{1,5})/i;
+const SUBURB_AFTER_COMMA = /,\s*\p{Lu}[\p{L}'.-]+/u;
+const STATE = /\b(?:NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\b/;
+const POSTCODE = /(?:^|[\s,])\d{4}(?=$|[\s,])/;
+const PRICE = /\$\s?\d/;
+
+function looksLikeStreetAddress(t: string): boolean {
+  if (t.length > 120 || PRICE.test(t) || !ADDRESS_LINE.test(t)) return false;
+  // Past the street number, so "1234 Smith St" doesn't count as a postcode.
+  const rest = t.replace(/^[ \t>*-]*(?:(?:unit|apt|apartment|flat|lot|suite)\s*)?\S+/i, "");
+  return UNIT_NUMBER.test(t) || SUBURB_AFTER_COMMA.test(rest) || STATE.test(rest) || POSTCODE.test(rest);
+}
+const EMAIL = /[A-Z0-9._%+'-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const PHONE = /(?:\+?61[\s-]?\(?0?\)?[\s-]?[2-478]|\(?\b0[2-478]\)?)(?:[\s-]?\d){8}\b|\b1[38]00[\s-]?\d{3}[\s-]?\d{3}\b|\b13[\s-]?\d{2}[\s-]?\d{2}\b/g;
+const GREETING = /\b(Hi|Hello|Hey|Dear|G'day)[ \t]+(?!there\b|team\b|everyone\b|all\b)[\p{Lu}][\p{L}'-]+(?:[ \t]+[\p{Lu}][\p{L}'-]+)?/gu;
+const LABELLED_NUMBER =
+  /\b(order|reference|ref|confirmation|receipt|invoice|tracking|consignment|card|account|member(?:ship)?|loyalty|rewards?|flybuys|everyday rewards|customer)(?:[ \t]+(?:no\.?|number|num|#|id|code))?[ \t]*[:#]?[ \t]*(?=[A-Z0-9-]*\d)([A-Z0-9][A-Z0-9-]{3,})/gi;
+const LONG_DIGITS = /\b(?:\d[ -]?){12,19}\b/g;
+
+/**
+ * Strip details that identify a person from pasted text before it leaves the device for the AI:
+ * email addresses, Australian phone numbers, street-address lines, "Hi Sam" style greetings,
+ * and order / card / loyalty numbers. Item lines (quantities, prices, product names) are kept.
+ * Best effort, not a guarantee: the on-device parser still sees the original text.
+ */
+export function scrubPersonalInfo(text: string): string {
+  /** Lines still to drop after a bare "Deliver to:" label (name, street, suburb...). */
+  let afterLabel = 0;
+  const lines = text.split(/\r?\n/).filter((line) => {
+    const t = line.trim();
+    if (!t) {
+      afterLabel = 0;
+      return true;
+    }
+    if (ADDRESS_LABEL_ONLY.test(t)) {
+      afterLabel = 4;
+      return false;
+    }
+    if (afterLabel > 0) {
+      // The labelled block runs to a blank line, a price or four lines, whichever comes first.
+      if (PRICE.test(t)) afterLabel = 0;
+      else {
+        afterLabel--;
+        return false;
+      }
+    }
+    if (ADDRESS_LABEL_LINE.test(t)) return false;
+    if (looksLikeStreetAddress(t)) return false;
+    if (t.length <= 80 && STATE_POSTCODE_LINE.test(t) && !PRICE.test(t)) return false;
+    return true;
+  });
+  return lines
+    .join("\n")
+    .replace(EMAIL, "[email]")
+    .replace(GREETING, "$1")
+    .replace(LABELLED_NUMBER, (_m, label: string) => `${label} [number]`)
+    .replace(LONG_DIGITS, "[number]")
+    .replace(PHONE, "[phone]");
+}

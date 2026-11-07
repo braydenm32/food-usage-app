@@ -3,16 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, Crown, LogOut, RefreshCw, Share2, UserPlus, Users } from "lucide-react";
+import { Check, Copy, Crown, Link2Off, LogOut, RefreshCw, Share2, Trash2, UserMinus, UserPlus, Users } from "lucide-react";
 import { useLarder } from "@/lib/store";
 import { useHydrated } from "@/lib/use-hydrated";
 import { getSupabase, supabaseConfigured } from "@/lib/supabase/client";
 import { getSyncEngine } from "@/lib/sync/engine";
 import { hasLocalData } from "@/lib/sync/apply";
 import {
-  INVITE_DAYS,
+  INVITE_LIFETIME,
+  cancelOpenInvites,
   createHousehold,
   createInvite,
+  deleteAccount,
   explain,
   inviteUrl,
   leaveHousehold,
@@ -20,10 +22,12 @@ import {
   listMemberships,
   nameFromEmail,
   parseInviteInput,
+  removeMember,
   setDisplayName,
   type Member,
   type Membership,
 } from "@/lib/sync/household";
+import { clearAllLocalData } from "@/lib/local-data";
 import { describeFailed, describeSync, timeAgo, useSyncStatus } from "@/lib/sync/status";
 import { useNow } from "@/lib/use-now";
 import { AuthPanel } from "@/components/account/auth-panel";
@@ -32,6 +36,8 @@ import {
   NotConfigured,
   Notice,
   SkeletonCards,
+  defaultJoinMode,
+  previousWarning,
   unsyncedWarning,
   useAuthReturn,
   type JoinMode,
@@ -40,10 +46,33 @@ import { SyncIcon } from "@/components/sync-indicator";
 import { Button, Card, Field, Input, PageHeader } from "@/components/ui";
 import { toast } from "@/components/toast";
 
+/** Set just before the reload that follows deleting an account, so the page can say it worked. */
+const DELETED_FLAG = "larder-account-deleted";
+
+function useAccountDeleted(): boolean {
+  // Read once on the client (shown only after hydration), cleared after the first render.
+  const [deleted] = useState(() => {
+    try {
+      return typeof window !== "undefined" && sessionStorage.getItem(DELETED_FLAG) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(DELETED_FLAG);
+    } catch {
+      /* storage blocked */
+    }
+  }, []);
+  return deleted;
+}
+
 export default function AccountPage() {
   const hydrated = useHydrated();
   const status = useSyncStatus();
   const returnError = useAuthReturn();
+  const deleted = useAccountDeleted();
 
   let body: React.ReactNode;
   if (!hydrated || (supabaseConfigured && !status.ready)) body = <SkeletonCards />;
@@ -56,6 +85,9 @@ export default function AccountPage() {
     <div className="lg:pb-8">
       <PageHeader title="Sync and share" subtitle="Keep your larder in step across phones, and share it with your household." />
       <div className="flex flex-col gap-6 px-5 lg:px-0">
+        {hydrated && deleted && (
+          <Notice>Your account has been deleted, and so has everything Larder kept on this device.</Notice>
+        )}
         {status.notice && hydrated && (
           <div className="flex flex-col gap-2">
             <Notice tone="warn">{status.notice}</Notice>
@@ -144,8 +176,13 @@ function NoHousehold() {
 
 function StartOrJoin({ email }: { email: string | null }) {
   const router = useRouter();
+  const { previous, userId } = useSyncStatus();
   const profile = useLarder((s) => s.profile);
   const itemCount = useLarder((s) => s.items.length);
+  const local = useLarder((s) => hasLocalData(s));
+  /** Only asked when the food here came from another household: then it starts empty by default. */
+  const [mode, setMode] = useState<JoinMode>(() => defaultJoinMode(previous));
+  const carried = local ? previousWarning(previous, userId) : null;
   const setProfile = useLarder((s) => s.setProfile);
   const [householdName, setHouseholdName] = useState(profile.householdName);
   const [myName, setMyName] = useState(() => nameFromEmail(email));
@@ -164,7 +201,7 @@ function StartOrJoin({ email }: { email: string | null }) {
     try {
       if (name !== profile.householdName) setProfile({ householdName: name });
       const id = await createHousehold(client, name, myName);
-      await engine.bind(id, name, "upload").catch(() => {
+      await engine.bind(id, name, carried && mode === "replace" ? "replace" : "upload").catch(() => {
         // The household exists and this device is bound; the outbox retries the upload.
         toast("Household started. Your food will finish uploading when the connection allows.");
       });
@@ -203,6 +240,12 @@ function StartOrJoin({ email }: { email: string | null }) {
               <Input id={id} value={myName} maxLength={60} autoComplete="given-name" onChange={(e) => setMyName(e.target.value)} placeholder="Sam" />
             )}
           </Field>
+          {carried && (
+            <>
+              <Notice tone="warn">{carried}</Notice>
+              <JoinModeChoice householdName={householdName.trim() || "the household"} value={mode} onChange={setMode} itemCount={itemCount} fresh />
+            </>
+          )}
           <Button type="submit" block disabled={busy}>
             <Users size={18} aria-hidden />
             {busy ? "Starting…" : "Start the household"}
@@ -253,9 +296,11 @@ function StartOrJoin({ email }: { email: string | null }) {
 
 /** Signed in on a new device (or after signing out): this account is already in a household. */
 function ConnectExisting({ membership }: { membership: Membership }) {
+  const { previous, userId } = useSyncStatus();
   const local = useLarder((s) => hasLocalData(s));
   const itemCount = useLarder((s) => s.items.length);
-  const [mode, setMode] = useState<JoinMode>("merge");
+  const [mode, setMode] = useState<JoinMode>(() => defaultJoinMode(previous));
+  const carried = local ? previousWarning(previous, userId) : null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -278,6 +323,7 @@ function ConnectExisting({ membership }: { membership: Membership }) {
       <h2 className="font-display text-xl text-ink">You&apos;re in {membership.householdName}</h2>
       <p className="mt-1 text-[15px] text-ink-2">This device isn&apos;t syncing with it yet.</p>
       <div className="mt-4 flex flex-col gap-4">
+        {carried && <Notice tone="warn">{carried}</Notice>}
         {local && <JoinModeChoice householdName={membership.householdName} value={mode} onChange={setMode} itemCount={itemCount} />}
         <Button block onClick={() => void connect()} disabled={busy}>
           {busy ? "Syncing…" : "Sync this device"}
@@ -314,6 +360,7 @@ function HouseholdView() {
   }, [hid, reloadKey]);
 
   const me = members.list.find((m) => m.userId === status.userId);
+  const isOwner = me?.role === "owner";
   const canRetry = status.state === "error" || status.state === "offline";
 
   return (
@@ -362,7 +409,7 @@ function HouseholdView() {
           ) : (
             <ul className="divide-y divide-line">
               {members.list.map((m) => (
-                <li key={m.userId} className="flex min-h-14 items-center gap-3 py-3">
+                <li key={m.userId} className="flex min-h-14 flex-wrap items-center gap-3 py-3">
                   <span
                     aria-hidden
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 font-semibold text-ink-2"
@@ -382,6 +429,14 @@ function HouseholdView() {
                       Started it
                     </span>
                   )}
+                  {isOwner && m.userId !== status.userId && (
+                    <RemoveMember
+                      householdId={hid}
+                      member={m}
+                      householdName={status.householdName ?? "the household"}
+                      onRemoved={() => setReloadKey((k) => k + 1)}
+                    />
+                  )}
                 </li>
               ))}
             </ul>
@@ -390,7 +445,7 @@ function HouseholdView() {
         </Card>
       </section>
 
-      <InviteCard householdId={hid} householdName={status.householdName ?? "your household"} />
+      <InviteCard householdId={hid} householdName={status.householdName ?? "your household"} isOwner={isOwner} />
       <LeaveCard
         householdId={hid}
         householdName={status.householdName ?? "this household"}
@@ -398,6 +453,65 @@ function HouseholdView() {
       />
       <AccountCard />
     </>
+  );
+}
+
+/** Owner only: take someone out of the household, after a confirm. */
+function RemoveMember({
+  householdId,
+  householdName,
+  member,
+  onRemoved,
+}: {
+  householdId: string;
+  householdName: string;
+  member: Member;
+  onRemoved: () => void;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const who = member.displayName ?? "this person";
+
+  const remove = async () => {
+    const client = getSupabase();
+    if (!client) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await removeMember(client, householdId, member.userId);
+      toast(`${member.displayName ?? "They"} can no longer see ${householdName}. Open invite links were cancelled too.`);
+      onRemoved();
+    } catch (e) {
+      setError(explain(e, "Couldn't remove them."));
+      setBusy(false);
+    }
+  };
+
+  if (!confirm) {
+    return (
+      <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setConfirm(true)} aria-label={`Remove ${who}`}>
+        <UserMinus size={14} aria-hidden />
+        Remove
+      </Button>
+    );
+  }
+  return (
+    <div role="alertdialog" aria-label={`Remove ${who}?`} className="flex basis-full flex-col gap-2 rounded-xl bg-soon-soft p-3">
+      <p className="text-sm text-ink">
+        Remove {who} from {householdName}? They stop seeing the household&apos;s food straight away, and every open invite link is
+        cancelled. Anything already on their devices stays there. To come back they&apos;d need a new invite.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" size="sm" onClick={() => setConfirm(false)} autoFocus>
+          Keep them
+        </Button>
+        <Button variant="danger" size="sm" onClick={() => void remove()} disabled={busy}>
+          {busy ? "Removing…" : `Remove ${who}`}
+        </Button>
+      </div>
+      {error && <Notice tone="error">{error}</Notice>}
+    </div>
   );
 }
 
@@ -466,9 +580,10 @@ function NamePrompt({ householdId, email, onSaved }: { householdId: string; emai
   );
 }
 
-function InviteCard({ householdId, householdName }: { householdId: string; householdName: string }) {
+function InviteCard({ householdId, householdName, isOwner }: { householdId: string; householdName: string; isOwner: boolean }) {
   const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canShare = typeof navigator !== "undefined" && "share" in navigator;
@@ -486,6 +601,22 @@ function InviteCard({ householdId, householdName }: { householdId: string; house
       setError(explain(e, "Couldn't make an invite link."));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const cancelAll = async () => {
+    const client = getSupabase();
+    if (!client) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      const n = await cancelOpenInvites(client, householdId);
+      setLink(null);
+      toast(n ? `Cancelled ${n} invite link${n === 1 ? "" : "s"}. They won't work any more.` : "There were no open invite links to cancel.");
+    } catch (e) {
+      setError(explain(e, "Couldn't cancel the invite links."));
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -545,8 +676,22 @@ function InviteCard({ householdId, householdName }: { householdId: string; house
             </Button>
           </div>
           <p className="text-sm text-ink-2">
-            Works for {INVITE_DAYS} days. Anyone with the link can join {householdName}, so send it only to people you live with.
+            This link lets one person join {householdName} and lasts {INVITE_LIFETIME}. Whoever opens it first can use it, so send it
+            only to the person you mean. Make a new link for each person.
           </p>
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => void make()} disabled={busy}>
+            <UserPlus size={14} aria-hidden />
+            {busy ? "Making a link…" : "Make another link"}
+          </Button>
+        </div>
+      )}
+      {isOwner && (
+        <div className="mt-4 border-t border-line pt-4">
+          <p className="text-sm text-ink-2">Sent a link to the wrong person, or not sure where one went?</p>
+          <Button variant="secondary" size="sm" className="mt-2" onClick={() => void cancelAll()} disabled={cancelling}>
+            <Link2Off size={14} aria-hidden />
+            {cancelling ? "Cancelling…" : "Cancel open invite links"}
+          </Button>
         </div>
       )}
       {error && (
@@ -611,10 +756,11 @@ function LeaveCard({ householdId, householdName, lastOne }: { householdId: strin
             Leave {householdName}?
           </p>
           <p id="leave-body" className="mt-1 text-sm text-ink-2">
-            You&apos;ll keep what&apos;s on this device, but changes will stop syncing both ways. To come back you&apos;ll need a new invite.
+            You&apos;ll keep a copy of the food on this device, but it stops syncing both ways. Invite links you made stop working, and to
+            come back you&apos;ll need a new invite.
             {lastOne
               ? ` You're the only one in ${householdName}, so leaving deletes it for good.`
-              : " If you're the last person in it, the household is deleted."}
+              : " If you started the household, the person who's been in it longest takes over."}
           </p>
           {unsynced > 0 && (
             <div className="mt-3">
@@ -649,12 +795,22 @@ function LeaveCard({ householdId, householdName, lastOne }: { householdId: strin
 }
 
 function AccountCard() {
-  const { email } = useSyncStatus();
-  /** Changes still unsent after trying to flush; non-zero shows the confirm. */
+  const { email, householdId, householdName, previous } = useSyncStatus();
+  /**
+   * This device syncs with a household: ask whether to keep its food here. When it only
+   * came from one earlier (signed out and kept), it's not in step with the household any
+   * more, so it isn't offered for removal: signing out keeps it.
+   */
+  const fromHousehold = Boolean(householdId);
+  const fromName = householdName ?? previous?.householdName ?? null;
+  /** Non-null while the sign-out choice is showing. */
+  const [step, setStep] = useState<{ everywhere: boolean } | null>(null);
+  const [keep, setKeep] = useState(false);
+  /** Changes still unsent after trying to flush; non-zero shows the warning. */
   const [unsynced, setUnsynced] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  const signOut = async (force = false) => {
+  const signOut = async (everywhere: boolean, force = false) => {
     const engine = getSyncEngine();
     if (!engine) return;
     setBusy(true);
@@ -662,12 +818,22 @@ function AccountCard() {
       if (!force) {
         const left = await engine.flushPending();
         if (left > 0) {
+          // Removing would lose them: only keeping is offered from here.
           setUnsynced(left);
+          setKeep(true);
+          setStep({ everywhere });
           return;
         }
       }
-      await engine.signOut();
-      toast("Signed out. Your food is still on this device.");
+      // Never remove changes that haven't reached the household (the engine checks too).
+      const keepData = fromHousehold && unsynced === 0 ? keep : true;
+      const reached = await engine.signOut({ keepData, everywhere });
+      const where = !everywhere
+        ? "Signed out."
+        : reached
+          ? "Signed out on all your devices."
+          : "Signed out here, but couldn't reach your other devices. Try again from one of them.";
+      toast(keepData ? `${where} Your food is still on this device.` : `${where} The household's food has been removed from this device.`);
     } catch {
       toast("Signed out on this device.");
     } finally {
@@ -675,39 +841,193 @@ function AccountCard() {
     }
   };
 
+  const begin = (everywhere: boolean) => {
+    setUnsynced(0);
+    if (!fromHousehold) {
+      void signOut(everywhere);
+      return;
+    }
+    setKeep(false);
+    setStep({ everywhere });
+  };
+
+  const allChoices = [
+    {
+      keep: false,
+      title: "Remove it from this device",
+      body: `The food, list, recipes and history${fromName ? ` from ${fromName}` : ""} are cleared here. They stay in the household, and come back when you sign in again. Best for a shared or borrowed device.`,
+    },
+    {
+      keep: true,
+      title: "Keep this household's food on this device",
+      body: "Anyone who uses this device can still see it, but it stops syncing.",
+    },
+  ];
+  /** With changes still unsent, removing would lose them, so only keeping is offered. */
+  const choices = unsynced > 0 ? allChoices.filter((c) => c.keep) : allChoices;
+
   return (
-    <Card className="p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm text-ink-2">Signed in as</p>
-          <p className="truncate text-[15px] font-medium text-ink">{email ?? "your account"}</p>
+    <>
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm text-ink-2">Signed in as</p>
+            <p className="truncate text-[15px] font-medium text-ink">{email ?? "your account"}</p>
+          </div>
+          {!step && (
+            <Button variant="secondary" size="sm" className="shrink-0" onClick={() => begin(false)} disabled={busy}>
+              <LogOut size={14} aria-hidden />
+              {busy ? "Signing out…" : "Sign out"}
+            </Button>
+          )}
         </div>
-        {!unsynced && (
-          <Button variant="secondary" size="sm" className="shrink-0" onClick={() => void signOut()} disabled={busy}>
-            <LogOut size={14} aria-hidden />
-            {busy ? "Signing out…" : "Sign out"}
+        {step && (
+          <div className="mt-4 flex flex-col gap-3" role="alertdialog" aria-labelledby="signout-heading">
+            <p id="signout-heading" className="text-[15px] font-medium text-ink">
+              {step.everywhere ? "Sign out on all your devices?" : "Sign out?"}{" "}
+              {unsynced > 0 ? "The food on this device stays here." : "What should happen to the food on this device?"}
+            </p>
+            <fieldset className="flex flex-col gap-2">
+              <legend className="sr-only">The household&apos;s food on this device</legend>
+              {choices.map((c) => (
+                <label
+                  key={String(c.keep)}
+                  className={
+                    "flex cursor-pointer gap-3 rounded-2xl border p-4 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-primary " +
+                    (keep === c.keep ? "border-primary bg-primary-soft" : "border-line bg-surface hover:bg-surface-2")
+                  }
+                >
+                  <input
+                    type="radio"
+                    name="signout-keep"
+                    checked={keep === c.keep}
+                    onChange={() => setKeep(c.keep)}
+                    className="mt-1 h-5 w-5 shrink-0 accent-[var(--primary)]"
+                  />
+                  <span>
+                    <span className="block text-[15px] font-medium text-ink">{c.title}</span>
+                    <span className="mt-0.5 block text-sm text-ink-2">{c.body}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            {unsynced > 0 && <Notice tone="warn">{unsyncedWarning(unsynced)}</Notice>}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setStep(null);
+                  setUnsynced(0);
+                }}
+                autoFocus
+              >
+                Stay signed in
+              </Button>
+              <Button variant={unsynced > 0 ? "danger" : "primary"} size="sm" onClick={() => void signOut(step.everywhere, unsynced > 0)} disabled={busy}>
+                {busy ? "Signing out…" : unsynced > 0 ? "Sign out anyway" : "Sign out"}
+              </Button>
+            </div>
+          </div>
+        )}
+        <p className="mt-3 text-sm text-ink-3">
+          Signing out stops syncing on this device. <Link href="/settings" className="underline">Theme and reminders</Link> are always per
+          device.
+        </p>
+        {!step && (
+          <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => begin(true)} disabled={busy}>
+            Sign out of all devices
           </Button>
         )}
-      </div>
-      {unsynced > 0 && (
-        <div className="mt-3 rounded-xl bg-soon-soft p-3" role="alertdialog" aria-labelledby="signout-heading">
-          <p id="signout-heading" className="text-sm text-ink">
-            {unsyncedWarning(unsynced)}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setUnsynced(0)} autoFocus>
-              Stay signed in
-            </Button>
-            <Button variant="danger" size="sm" onClick={() => void signOut(true)} disabled={busy}>
-              Sign out anyway
+      </Card>
+      <DeleteAccountCard householdName={householdName} />
+    </>
+  );
+}
+
+/** Danger zone: delete the account on the server, then wipe this device. */
+function DeleteAccountCard({ householdName }: { householdName: string | null }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    const client = getSupabase();
+    if (!client) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAccount(client);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't delete your account. Try again in a minute.");
+      setBusy(false);
+      return;
+    }
+    // The account is gone: stop syncing, empty the store, wipe storage and start again.
+    await getSyncEngine()?.afterAccountDeleted();
+    useLarder.getState().resetAll();
+    clearAllLocalData();
+    try {
+      sessionStorage.setItem(DELETED_FLAG, "1");
+    } catch {
+      /* storage blocked: the page just won't say so */
+    }
+    window.location.replace("/account");
+  };
+
+  return (
+    <section aria-labelledby="danger-heading">
+      <h2 id="danger-heading" className="mb-2 px-1 font-display text-xl text-ink">
+        Danger zone
+      </h2>
+      <Card className="p-5">
+        {!confirm ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[15px] font-medium text-ink">Delete my account</p>
+              <p className="text-sm text-ink-2">Removes your account and clears this device. This can&apos;t be undone.</p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="shrink-0 border-spoiled text-spoiled hover:bg-spoiled-soft"
+              onClick={() => setConfirm(true)}
+            >
+              <Trash2 size={14} aria-hidden />
+              Delete…
             </Button>
           </div>
-        </div>
-      )}
-      <p className="mt-3 text-sm text-ink-3">
-        Signing out keeps your food on this device and stops syncing. <Link href="/settings" className="underline">Theme and reminders</Link> are
-        always per device.
-      </p>
-    </Card>
+        ) : (
+          <div role="alertdialog" aria-labelledby="delete-heading" aria-describedby="delete-body">
+            <p id="delete-heading" className="text-[15px] font-medium text-ink">
+              Delete your account for good?
+            </p>
+            <div id="delete-body" className="mt-1 flex flex-col gap-2 text-sm text-ink-2">
+              <p>
+                Your email address, your place in {householdName ?? "any household you're in"}, and your reminders are deleted.
+              </p>
+              <p>
+                Food you shared stays with the household for the people still in it. If you&apos;re the last one in a household, it&apos;s
+                deleted too.
+              </p>
+              <p>Everything Larder keeps on this device is cleared as well, including your settings.</p>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setConfirm(false)} autoFocus>
+                Keep my account
+              </Button>
+              <Button variant="danger" size="sm" onClick={() => void run()} disabled={busy}>
+                {busy ? "Deleting…" : "Delete my account"}
+              </Button>
+            </div>
+            {error && (
+              <div className="mt-3">
+                <Notice tone="error">{error}</Notice>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+    </section>
   );
 }

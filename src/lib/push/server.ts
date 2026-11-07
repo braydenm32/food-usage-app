@@ -82,14 +82,18 @@ export function digestPayload(d: Digest): PushPayload {
   return { title: d.title, body: d.body, url: d.url, tag: "larder-digest" };
 }
 
-type SendResult = "sent" | "gone" | "failed";
+/** Why a send failed, for server logs (never includes keys). */
+export interface SendError {
+  status?: number;
+  message: string;
+}
 
-/** Why the last failed send failed, for logs and the test route (never includes keys). */
-export let lastSendError: { status?: number; message: string } | null = null;
+/** One send's outcome. Returned per call (not kept in a module variable), so concurrent sends can't mix them up. */
+export type SendResult = { result: "sent" } | { result: "gone" } | { result: "failed"; error: SendError };
 
 export async function sendPush(cfg: PushConfig, row: Pick<SubscriptionRow, "endpoint" | "p256dh" | "auth">, payload: PushPayload): Promise<SendResult> {
   // Never post anywhere but a browser push service (the row could have been written by anyone signed in).
-  if (!isAllowedPushEndpoint(row.endpoint)) return "gone";
+  if (!isAllowedPushEndpoint(row.endpoint)) return { result: "gone" };
   const sub: PushSubscription = { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } };
   try {
     await webpush.sendNotification(sub, JSON.stringify(payload), {
@@ -99,16 +103,16 @@ export async function sendPush(cfg: PushConfig, row: Pick<SubscriptionRow, "endp
       topic: payload.tag,
       vapidDetails: { subject: cfg.vapidSubject, publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate },
     });
-    return "sent";
+    return { result: "sent" };
   } catch (e) {
     // 404/410: the browser unsubscribed or the subscription expired.
-    if (e instanceof WebPushError && (e.statusCode === 404 || e.statusCode === 410)) return "gone";
-    lastSendError =
+    if (e instanceof WebPushError && (e.statusCode === 404 || e.statusCode === 410)) return { result: "gone" };
+    const error: SendError =
       e instanceof WebPushError
         ? { status: e.statusCode, message: String(e.body || e.message).slice(0, 300) }
         : { message: e instanceof Error ? e.message.slice(0, 300) : "Unknown error" };
-    console.error("[push] send failed", new URL(row.endpoint).host, lastSendError);
-    return "failed";
+    console.error("[push] send failed", new URL(row.endpoint).host, error);
+    return { result: "failed", error };
   }
 }
 
@@ -212,7 +216,7 @@ export async function sendDueDigests(cfg: PushConfig, now: Date = new Date()): P
         summary.quiet++;
         continue;
       }
-      const result = await sendPush(cfg, s, digestPayload(digest));
+      const { result } = await sendPush(cfg, s, digestPayload(digest));
       if (result === "sent") {
         summary.sent++;
         if (s.failures) await db.from("push_subscriptions").update({ failures: 0 }).eq("id", s.id);
