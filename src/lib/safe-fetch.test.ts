@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { isBlockedAddress } from "./safe-fetch";
+import { isBlockedAddress, safeFetchPage } from "./safe-fetch";
 
 describe("isBlockedAddress", () => {
   it.each([
@@ -8,4 +8,15 @@ describe("isBlockedAddress", () => {
     "::1", "::", "::ffff:7f00:1", "::ffff:127.0.0.1", "::ffff:a9fe:a9fe", "64:ff9b::7f00:1", "2002:7f00:1::", "fc00::1", "fe80::1", "fec0::1", "2001:db8::1", "2001::1",
   ])("blocks %s", (ip) => expect(isBlockedAddress(ip)).toBe(true));
   it.each(["1.1.1.1", "142.250.70.4", "2606:4700:4700::1111", "::ffff:8.8.8.8", "64:ff9b::808:808"])("allows %s", (ip) => expect(isBlockedAddress(ip)).toBe(false));
+});
+
+describe("safeFetchPage", () => {
+  it("gives up once the total deadline has passed", async () => {
+    await expect(safeFetchPage("https://example.com/", { totalMs: 0 })).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("never dials a private address", async () => {
+    await expect(safeFetchPage("http://127.0.0.1/")).rejects.toMatchObject({ code: "blocked" });
+    await expect(safeFetchPage("http://[::1]/")).rejects.toMatchObject({ code: "blocked" });
+  });
 });

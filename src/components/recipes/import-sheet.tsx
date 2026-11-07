@@ -7,13 +7,22 @@ import { Camera, CircleAlert, Link2, Loader2, PenLine, TriangleAlert, X } from "
 import { Button, Field, Input, Segmented, Sheet } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { downscaleImage } from "@/components/add/image";
+import { AiDeniedMessage } from "@/components/ai-denied";
+import { AI_QUOTA_COPY, AI_SIGN_IN_COPY, aiDenial, aiFetch, type AiDenial } from "@/lib/ai-client";
 import { formatAmount } from "@/lib/recipes/quantity";
 import { EditRecipeSheet, blankRecipe } from "./edit-recipe-sheet";
 import { useLarder } from "@/lib/store";
 import type { Recipe } from "@/lib/types";
 
 type Mode = "link" | "photo";
-type State = { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string } | { kind: "done"; recipe: Recipe; method: string };
+type State =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "error"; message: string; denied?: AiDenial }
+  | { kind: "done"; recipe: Recipe; method: string };
+
+/** Same cap as the server (and under the host's 4.5 MB request limit). */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 /** Lines we probably misread, so the preview can flag them before saving. */
 const looksOff = (name: string) => /^(?:[(/]|[x×]\s|\d(?!0\b))/i.test(name.trim()) || /^\d+(?:[./]\d+)?$/.test(name.trim()) || name.trim().length < 2;
@@ -51,8 +60,13 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
     setState({ kind: "loading" });
     try {
       const res = await make(ctl.signal);
-      const d = (await res.json()) as { recipe?: Recipe; method?: string; message?: string };
+      const d = (await res.json()) as { recipe?: Recipe; method?: string; message?: string; error?: string };
       if (ctl.signal.aborted) return;
+      const denied = aiDenial(res.status, d);
+      if (denied) {
+        setState({ kind: "error", denied, message: denied === "quota" ? AI_QUOTA_COPY : d.message || AI_SIGN_IN_COPY });
+        return;
+      }
       if (!res.ok || !d.recipe) throw new Error(d.message || "Couldn't import that recipe.");
       setTitle(d.recipe.title);
       setTbsp(d.recipe.tbspMl === 15 ? "15" : "20");
@@ -66,7 +80,8 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
   function importLink(link = url) {
     const u = link.trim();
     if (!u) return;
-    void run((signal) => fetch("/api/recipes/import", { method: "POST", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ url: u }) }));
+    // Signed in, a page without recipe data can still be read with AI.
+    void run((signal) => aiFetch("/api/recipes/import", { method: "POST", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ url: u }) }));
   }
 
   // A link shared to Larder from another app: switch to Link and start straight away.
@@ -89,15 +104,21 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
 
   async function importPhoto(file: File | undefined) {
     if (!file) return;
-    let blob: Blob = file;
+    // Always send the shrunk copy: re-encoding also drops the photo's location and camera details.
+    let blob: Blob;
     try {
       blob = await downscaleImage(file);
     } catch {
-      // Couldn't shrink it here (unusual format): send the original and let the server check it.
+      setState({ kind: "error", message: "Couldn't read that photo. Try a JPEG or PNG." });
+      return;
+    }
+    if (blob.size > MAX_UPLOAD_BYTES) {
+      setState({ kind: "error", message: "That photo is too big. Try one under 4 MB." });
+      return;
     }
     const form = new FormData();
     form.append("image", blob, "recipe.jpg");
-    void run((signal) => fetch("/api/recipes/import", { method: "POST", signal, body: form }));
+    void run((signal) => aiFetch("/api/recipes/import", { method: "POST", signal, body: form }));
   }
 
   function reset() {
@@ -320,7 +341,7 @@ export function ImportSheet({ open, onClose, initialUrl }: { open: boolean; onCl
           />
           {state.kind === "error" && (
             <div role="alert" className="flex flex-wrap items-center justify-between gap-x-3 rounded-2xl bg-spoiled-soft p-3 text-sm text-ink">
-              <span>{state.message}</span>
+              <span>{state.denied ? <AiDeniedMessage why={state.denied} message={state.message} /> : state.message}</span>
               {mode === "link" && url.trim() && (
                 <button type="button" onClick={() => importLink()} className="inline-flex min-h-11 items-center font-semibold text-primary hover:underline">
                   Try again
