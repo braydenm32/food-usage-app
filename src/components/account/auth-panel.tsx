@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Mail } from "lucide-react";
+import Link from "next/link";
 import { getSupabase, providerEnabled } from "@/lib/supabase/client";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { authMessage, RETURN_CODE_PROVIDER_OFF } from "@/components/account/auth-errors";
@@ -143,6 +144,13 @@ export function AuthPanel({ returnPath, intro }: { returnPath: string; intro?: s
             <GoogleMark />
             {busy === "google" ? "Opening Google…" : "Continue with Google"}
           </Button>
+          <p className="text-center text-xs text-ink-3">
+            By signing in you agree to our{" "}
+            <Link href="/privacy" className="underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            .
+          </p>
         </form>
       ) : (
         <form

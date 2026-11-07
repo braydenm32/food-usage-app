@@ -191,7 +191,12 @@ export default function WelcomePage() {
           <Button size="lg" block onClick={() => setStep(1)}>
             Get started
           </Button>
-          <p className="mt-3 text-center text-xs text-ink-3">Nothing leaves your device. No account needed.</p>
+          <p className="mt-3 text-center text-xs text-ink-3">
+            Your food stays on your device. No account needed. Photos and pasted text you choose to scan are sent to an AI to be read.{" "}
+            <Link href="/privacy" className="font-medium text-primary underline underline-offset-2">
+              Privacy policy
+            </Link>
+          </p>
         </div>
       )}
     </div>

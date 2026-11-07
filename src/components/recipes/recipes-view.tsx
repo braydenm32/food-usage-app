@@ -7,6 +7,7 @@ import { BookOpen, CalendarDays, CircleAlert, Download, Globe, Plus, RotateCcw, 
 import { Button, Chip, EmptyState, PageHeader, Segmented, SectionTitle, buttonClass } from "@/components/ui";
 import { toast } from "@/components/toast";
 import { RecipeCard, RecipeCardSkeleton } from "@/components/recipes/recipe-card";
+import { AiIdeasNotice } from "@/components/privacy-notices";
 import { ImportSheet } from "@/components/recipes/import-sheet";
 import { MoreIdeasLinks } from "@/components/recipes/more-ideas";
 import { PlanView } from "@/components/recipes/plan-view";
@@ -47,6 +48,8 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
   const planMeal = useLarder((s) => s.planMeal);
   const views = useItemViews();
   const profile = useLarder((s) => s.profile);
+  // Off in Settings: the AI gets only the number of people. The local allergen filter still applies.
+  const shareProfile = useLarder((s) => s.settings.aiIncludeProfile !== false);
   const saved = useLarder((s) => s.savedRecipes);
 
   // A link shared to Larder from another app arrives as ?url= or inside ?text=.
@@ -136,11 +139,13 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
     () =>
       JSON.stringify({
         items: views.filter((v) => v.expiry.status !== "expired").slice(0, 40).map((v) => ({ name: v.item.name, daysLeft: v.expiry.daysLeft })),
-        profile,
+        profile: shareProfile
+          ? { people: profile.people, diets: profile.diets, allergies: profile.allergies, likes: profile.likes, dislikes: profile.dislikes }
+          : { people: profile.people },
         mustUse: pickedName ? [pickedName] : undefined,
         count: 3,
       }),
-    [views, profile, pickedName],
+    [views, profile, pickedName, shareProfile],
   );
   // Show the ideas already paid for today, rather than asking again.
   const [aiRestoredFor, setAiRestoredFor] = useState<string | null>(null);
@@ -410,6 +415,7 @@ export function RecipesView({ defaultTab }: { defaultTab?: Tab }) {
                   <Sparkles size={18} aria-hidden /> {ai.state === "loading" ? "Thinking up recipes…" : ai.state === "done" ? "Get more ideas" : "Get fresh ideas"}
                 </Button>
                 {larderEmpty && <p className="mt-2 text-sm text-ink-3">Add a few items to your larder first.</p>}
+                <AiIdeasNotice className="mt-3" />
                 {ai.state === "error" && (
                   <p role="alert" className="mt-3 flex items-start gap-2 rounded-2xl bg-spoiled-soft p-3 text-sm text-ink">
                     <WifiOff size={16} className="mt-0.5 shrink-0" aria-hidden /> {ai.message ?? "Couldn't get ideas just now. Try again in a moment."}
